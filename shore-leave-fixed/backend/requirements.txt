@@ -1,0 +1,7 @@
+flask
+flask-cors
+insightface
+numpy
+onnxruntime
+opencv-python
+pymongo

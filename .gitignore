@@ -1,0 +1,38 @@
+# Secrets and local environment configuration
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Dependencies and generated builds
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.next/
+**/.next/
+.vite/
+**/.vite/
+
+# Runtime data and diagnostics may contain credentials or personal data
+*.log
+runtime-logs/
+**/runtime-logs/
+shore-leave-fixed/backend/backups/
+shore-leave-fixed/backend/uploads/
+
+# Generated snapshots, patches, and archives are not source of truth
+*.zip
+*.bak
+BACKEND_CODE_SNAPSHOT.txt
+backend-env-files-*/
+active-frontend-patch/
+active-face-patch/
