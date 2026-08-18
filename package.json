@@ -1,16 +1,20 @@
 {
-  "name": "shore-leave-fixed-workspace",
+  "name": "shore-leave-management-system",
   "version": "1.0.0",
   "private": true,
-  "description": "Convenience npm scripts for the Shore Leave Management System.",
+  "description": "Shore Leave Management System - Biometric Gate Control & Cadet Portal",
   "scripts": {
-    "start": "npm --prefix shore-leave-fixed/backend start",
+    "dev": "npm run dev:backend",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend start",
+    "build:frontend": "npm --prefix frontend run build",
+    "check": "npm --prefix backend run check",
+    "backup": "npm --prefix backend run backup",
     "host": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/keep-backend-up.ps1",
-    "host:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-shoreleave-autostart.ps1",
-    "check": "npm --prefix shore-leave-fixed/backend run check",
-    "backup": "npm --prefix shore-leave-fixed/backend run backup",
-    "install:backend": "npm --prefix shore-leave-fixed/backend install",
-    "install:python": "npm --prefix shore-leave-fixed/backend run install:python"
+    "install:all": "npm install && npm --prefix frontend install && npm --prefix backend install",
+    "install:frontend": "npm --prefix frontend install",
+    "install:backend": "npm --prefix backend install",
+    "install:python": "npm --prefix backend run install:python"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",

@@ -42,12 +42,12 @@ This method hosts the frontend globally on Cloudflare's CDN and securely tunnels
 
 ### Step 2: Deploy Frontend on Cloudflare Pages (Free)
 1. In Cloudflare Dashboard, go to **Workers & Pages** > **Create application** > **Pages**.
-2. Connect your GitHub repository (or upload the folder `sea-bridge-command`).
+2. Connect your GitHub repository (or upload the folder `frontend`).
 3. Set the build settings:
    - **Framework preset:** `Vite`
    - **Build command:** `npm run build`
    - **Build output directory:** `.output/public`
-   - **Root directory:** `sea-bridge-command`
+   - **Root directory:** `frontend`
 4. In **Environment Variables**, add:
    - `VITE_API_URL` = `https://api.shoreleave.in`
 5. Click **Save and Deploy**.
@@ -82,12 +82,12 @@ Now, whenever your backend is running locally on port 3000, `https://api.shorele
 3. Click **New +** > **Web Service** and connect your GitHub repository.
 4. Configure settings:
    - **Name:** `shoreleave-api`
-   - **Root Directory:** `shore-leave-fixed/backend`
+   - **Root Directory:** `backend`
    - **Runtime:** `Node`
    - **Build Command:** `npm install`
    - **Start Command:** `npm start`
    - **Instance Type:** `Free`
-5. Under **Environment Variables**, copy the keys from your `shore-leave-fixed/backend/.env`:
+5. Under **Environment Variables**, copy the keys from your `backend/.env`:
    - `MONGO_URI`: *Your MongoDB connection string*
    - `JWT_SECRET`: *Your JWT secret*
    - `SUPABASE_URL`: *Your Supabase project URL*
@@ -104,7 +104,7 @@ Now, whenever your backend is running locally on port 3000, `https://api.shorele
 1. Sign up at [Vercel.com](https://vercel.com/) with GitHub.
 2. Click **Add New...** > **Project** and select your repo.
 3. Configure settings:
-   - **Root Directory:** click Edit and select `sea-bridge-command`.
+   - **Root Directory:** click Edit and select `frontend`.
    - **Framework Preset:** `Vite`
    - **Build Command:** `npm run build`
    - **Output Directory:** `.output/public`
@@ -144,7 +144,7 @@ When deploying to production at `https://shoreleave.in`:
    - Ensure the Mantra USB Driver / AVDM service is installed on the gate PC.
    - Run the local bridge adapter on the gate PC:
      ```powershell
-     cd "shore-leave-fixed\backend"
+     cd "backend"
      node local-fingerprint-adapter.js
      ```
    - The browser at `https://shoreleave.in` connects to `http://127.0.0.1:8791` on the local PC to read fingerprint biometric scans without needing any server hardware!

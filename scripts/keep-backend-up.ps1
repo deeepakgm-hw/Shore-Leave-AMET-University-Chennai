@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Continue"
 
 $root = Split-Path -Parent $PSScriptRoot
-$backend = Join-Path $root "shore-leave-fixed\backend"
+$backend = Join-Path $root "backend"
 $logDir = Join-Path $root "runtime-logs"
 $pidFile = Join-Path $logDir "shoreleave-watchdog.pid"
 $watchdogLog = Join-Path $logDir "shoreleave-watchdog.log"

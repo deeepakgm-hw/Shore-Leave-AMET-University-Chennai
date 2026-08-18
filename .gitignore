@@ -17,22 +17,24 @@ node_modules/
 **/node_modules/
 dist/
 **/dist/
+.output/
+**/.output/
 .next/
 **/.next/
 .vite/
 **/.vite/
+.tanstack/
+**/.tanstack/
 
-# Runtime data and diagnostics may contain credentials or personal data
+# Runtime data and diagnostics
 *.log
 runtime-logs/
 **/runtime-logs/
-shore-leave-fixed/backend/backups/
-shore-leave-fixed/backend/uploads/
+backend/backups/
+backend/uploads/
+**/__pycache__/
 
-# Generated snapshots, patches, and archives are not source of truth
+# Generated archives
 *.zip
 *.bak
-BACKEND_CODE_SNAPSHOT.txt
-backend-env-files-*/
-active-frontend-patch/
-active-face-patch/
+*.tmp
