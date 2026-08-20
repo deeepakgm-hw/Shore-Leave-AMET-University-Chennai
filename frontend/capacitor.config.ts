@@ -3,7 +3,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 const config: CapacitorConfig = {
   appId: 'in.shoreleave.app',
   appName: 'Shore Leave',
-  webDir: 'dist',
+  webDir: '.output/public',
   server: {
     url: 'https://shoreleave.in',
     cleartext: true,
