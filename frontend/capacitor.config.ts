@@ -5,8 +5,7 @@ const config: CapacitorConfig = {
   appName: 'Shore Leave',
   webDir: '.output/public',
   server: {
-    // For development / production live backend connection:
-    // url: 'https://shoreleave.in',
+    url: 'https://shoreleave.in',
     cleartext: true,
     androidScheme: 'https'
   },
