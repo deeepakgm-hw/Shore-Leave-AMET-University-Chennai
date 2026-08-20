@@ -7,9 +7,6 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 export default defineConfig({
-  nitro: {
-    preset: "cloudflare-pages",
-  },
   vite: {
     server: {
       allowedHosts: [".loca.lt", ".lhr.life", ".serveousercontent.com"],
