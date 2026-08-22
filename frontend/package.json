@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "cap:sync": "cap sync",
     "cap:open": "cap open android",
+    "apk:build": "npm run build && npx cap sync android && cd android && .\\gradlew assembleDebug",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
