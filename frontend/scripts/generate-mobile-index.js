@@ -18,7 +18,8 @@ let jsFile = '';
 
 if (fs.existsSync(assetsDir)) {
   const files = fs.readdirSync(assetsDir);
-  const css = files.find((f) => f.startsWith('styles-') && f.endsWith('.css'));
+  // Match any compiled CSS bundle (e.g. index-*.css or styles-*.css)
+  const css = files.find((f) => f.endsWith('.css'));
   const js = files.find((f) => f.startsWith('index-') && f.endsWith('.js'));
   if (css) cssFile = `assets/${css}`;
   if (js) jsFile = `assets/${js}`;
@@ -43,7 +44,7 @@ const html = `<!DOCTYPE html>
 `;
 
 fs.writeFileSync(path.join(publicDir, 'index.html'), html, 'utf8');
-console.log('✔ Generated production entry index.html in .output/public');
+console.log(`✔ Generated production entry index.html with CSS: ${cssFile} and JS: ${jsFile}`);
 
 if (fs.existsSync(androidPublicDir)) {
   fs.writeFileSync(path.join(androidPublicDir, 'index.html'), html, 'utf8');
