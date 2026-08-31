@@ -1,4 +1,4 @@
-﻿require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -226,6 +226,10 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json({ limit: '25mb' })); // 3 face photos (JPEG 0.87) â‰ˆ 6â€“8MB each, total â‰ˆ 20MB max
+
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true });
+});
 
 function getClientIp(req) {
   return req.ip || req.socket?.remoteAddress || 'unknown';
@@ -7928,16 +7932,6 @@ async function startServer() {
     logInfo('[DB] No sample data found to seed');
   }
 
-  await ensureFaceServiceRunning();
-  setInterval(checkFaceServiceHealth, 60 * 1000).unref();
-  setInterval(() => {
-    retryFailedEmails().catch((error) => logError('[EMAIL] Retry job failed', error));
-  }, 10 * 60 * 1000).unref();
-  startPushReminderJobs();
-  startDailyBackupJob();
-  startMonthlyTokenResetJob();
-  ensureRecentFaceBackup();
-
   const PORT = Number(process.env.PORT) || 3000;
   httpServer.once('error', (error) => {
     if (error.code === 'EADDRINUSE') {
@@ -7961,6 +7955,34 @@ async function startServer() {
       } catch (error) {
         logError('[NFC] Verification failed', error);
         io.to('admin').emit('nfc:tap:result', { success: false, message: 'Verification failed' });
+      }
+    });
+
+    setImmediate(async () => {
+      try {
+        await ensureFaceServiceRunning();
+      } catch (error) {
+        logWarn('[FaceService] Startup failed. OTP check-in remains available.', error);
+      }
+
+      try {
+        setInterval(checkFaceServiceHealth, 60 * 1000).unref();
+
+        setInterval(() => {
+          retryFailedEmails().catch((error) => logError('[EMAIL] Retry job failed', error));
+        }, 10 * 60 * 1000).unref();
+
+        startPushReminderJobs();
+        startDailyBackupJob();
+        startMonthlyTokenResetJob();
+      } catch (error) {
+        logError('[JOBS] Failed to start background jobs', error);
+      }
+
+      try {
+        ensureRecentFaceBackup();
+      } catch (error) {
+        logWarn('[BACKUP] Startup face backup failed; scheduled backups remain enabled.', error);
       }
     });
   });
