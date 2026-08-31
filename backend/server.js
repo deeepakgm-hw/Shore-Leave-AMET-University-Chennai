@@ -7958,7 +7958,7 @@ async function startServer() {
       }
     });
 
-    setImmediate(async () => {
+    const optionalStartupTimer = setTimeout(async () => {
       try {
         await ensureFaceServiceRunning();
       } catch (error) {
@@ -7984,7 +7984,8 @@ async function startServer() {
       } catch (error) {
         logWarn('[BACKUP] Startup face backup failed; scheduled backups remain enabled.', error);
       }
-    });
+    }, 15000);
+    optionalStartupTimer.unref?.();
   });
 }
 
