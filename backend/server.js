@@ -7958,6 +7958,11 @@ async function startServer() {
       }
     });
 
+    if (process.env.SKIP_OPTIONAL_STARTUP === 'true') {
+      logWarn('[STARTUP] Optional face service and background jobs skipped by SKIP_OPTIONAL_STARTUP=true');
+      return;
+    }
+
     const optionalStartupTimer = setTimeout(async () => {
       try {
         await ensureFaceServiceRunning();
