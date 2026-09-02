@@ -769,7 +769,7 @@ Production administrators should monitor:
 
 ---
 
-# 🧩 Service Dependencies
+#  Service Dependencies
 
 ```text
                     ┌───────────────┐
@@ -797,7 +797,7 @@ Production administrators should monitor:
 
 ---
 
-# 🛡️ Biometric Service Availability
+#  Biometric Service Availability
 
 The main backend is designed to detect face-service availability.
 
