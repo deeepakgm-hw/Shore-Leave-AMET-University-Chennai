@@ -807,7 +807,7 @@ For production environments, the face service should be configured as an indepen
 
 ---
 
-# 📦 Deployment Documentation
+#  Deployment Documentation
 
 Detailed deployment procedures are maintained in:
 
@@ -819,7 +819,7 @@ This document contains the project's deployment configuration and operational pr
 
 ---
 
-# 📋 Project Status
+#  Project Status
 
 The project contains the core components required for:
 
@@ -842,7 +842,7 @@ Before institutional production use, all workflows should be validated in the ta
 
 ---
 
-# 🏫 Institutional Use
+#  Institutional Use
 
 This project is intended for use within an institutional environment to support the management and verification of shore-leave activities.
 
@@ -859,7 +859,7 @@ Institutional deployment should follow applicable organizational policies for:
 
 ---
 
-# 🤝 Development
+#  Development
 
 Contributions and modifications should follow the project's development and deployment procedures.
 
@@ -874,7 +874,7 @@ Before merging changes into the production branch:
 
 ---
 
-# 📜 License
+#  License
 
 This project is licensed under the **MIT License**.
 
@@ -882,9 +882,10 @@ See the `LICENSE` file for the complete license text.
 
 ---
 
-# 👨‍💻 Maintainer
+#  Maintainer
 
 **Shore Leave Management System**
+**Under Halfwave Platforms**
 
 **AMET University, Chennai**
 
