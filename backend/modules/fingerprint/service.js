@@ -263,7 +263,7 @@ function createFingerprintService({ Cadet, AuditLog, sdk, io, onVerified }) {
             details: { score: best.score, threshold: best.threshold, direction }
           }),
           writeAudit({
-            action: 'FACE_FALLBACK_USED',
+              action: 'EMAIL_OTP_FALLBACK_AVAILABLE',
             cadet: requestedCadet,
             actor,
             ipAddress,
@@ -282,10 +282,10 @@ function createFingerprintService({ Cadet, AuditLog, sdk, io, onVerified }) {
         success: false,
         matched: false,
         code: 'FINGERPRINT_MATCH_FAILED',
-        message: 'Fingerprint did not match. Continue with face verification.',
+        message: 'Fingerprint not recognized. Please try again or use email verification.',
         score: best.score,
         threshold: best.threshold,
-        fallback: { method: 'FACE', endpoint: '/api/cadets/checkout' }
+        fallback: { method: 'EMAIL_OTP', endpoint: '/api/gate/otp/generate' }
       };
     }
 
@@ -369,7 +369,7 @@ function createFingerprintService({ Cadet, AuditLog, sdk, io, onVerified }) {
       gatePassUrl: gateResult?.gatePassUrl || null,
       checkedOutAt: gateResult?.checkedOutAt || null,
       message: gateResult?.success
-        ? 'Fingerprint verified. Checkout completed and gate access approved.'
+        ? `Fingerprint verified. ${gateResult.action === 'CHECK_IN' ? 'Check-in' : 'Check-out'} completed.`
         : 'Fingerprint verified.'
     };
     io?.emit('fingerprint:verified', {
@@ -430,7 +430,7 @@ function createFingerprintService({ Cadet, AuditLog, sdk, io, onVerified }) {
       'FINGERPRINT_REMOVED',
       'FINGERPRINT_VERIFIED',
       'FINGERPRINT_MATCH_FAILED',
-      'FACE_FALLBACK_USED',
+      'EMAIL_OTP_FALLBACK_AVAILABLE',
       'EMERGENCY_VERIFICATION_USED'
     ];
     const items = await AuditLog.find({ action: { $in: actions } })

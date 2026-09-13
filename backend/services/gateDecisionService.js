@@ -48,12 +48,14 @@ function createGateDecisionService({
   onDecisionApplied
 }) {
   async function deviceContext() {
-    const device = await DeviceConfig.findOne({ deviceId: process.env.NFC_DEVICE_ID || 'gate-1' }).lean();
-    const readerStatus = nfcService.getReaderStatus();
+    const device = await DeviceConfig.findOne({
+      deviceId: process.env.FINGERPRINT_DEVICE_ID || process.env.GATE_DEVICE_ID || process.env.NFC_DEVICE_ID || 'gate-1'
+    }).lean();
     return {
       gate: device?.deviceName || 'Gate-1',
       location: device?.location || 'Main Gate',
-      reader: readerStatus.readerName || device?.reader || 'ACS ACR122U'
+      reader: process.env.FINGERPRINT_DEVICE_LABEL || device?.reader || 'Mantra MFS110',
+      provider: process.env.FINGERPRINT_DEVICE_TYPE || 'MANTRA_MFS110'
     };
   }
 
@@ -301,6 +303,8 @@ function createGateDecisionService({
       rollNumber: cadet.roll,
       photo: callbackResult.photo || cadet.photoUrl || activeLeave.checkOutPhotoUrl || '',
       leaveType: activeLeave.leaveType || '-',
+      passId: activeLeave.passId || null,
+      destination: activeLeave.dest || null,
       timeOut: activeLeave.checkOutTime || '-',
       timeIn: activeLeave.checkInTime,
       returnStatus: decision.late ? 'late' : callbackResult.returnStatus || 'onTime',
@@ -401,6 +405,7 @@ function createGateDecisionService({
       cadet: { id: cadet.roll, name: cadet.name },
       rollNumber: cadet.roll,
       leaveType: leaveRecord.leaveType,
+      destination: leaveRecord.dest || null,
       timeOut: leaveRecord.checkOutTime,
       timeIn: '-',
       status: 'EXITED',
