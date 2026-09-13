@@ -12,6 +12,9 @@ function createFingerprintController({ service }) {
     deviceStatus: async (req, res) => {
       res.json({ success: true, ...(await service.deviceStatus()) });
     },
+    deviceDiagnostic: async (req, res) => {
+      res.json({ success: true, ...(await service.deviceDiagnostic()) });
+    },
     summary: async (req, res) => {
       res.json(await service.summary());
     },

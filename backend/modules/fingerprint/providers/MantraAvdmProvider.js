@@ -47,7 +47,9 @@ class MantraAvdmProvider extends FingerprintProvider {
       serialNumber: null,
       sdkVersion: null,
       checkedAt: null,
-      code: 'DEVICE_OFFLINE'
+      code: 'DEVICE_OFFLINE',
+      connectionState: 'DISCONNECTED',
+      ready: false
     };
   }
 
@@ -137,7 +139,13 @@ class MantraAvdmProvider extends FingerprintProvider {
           serialNumber: payload.serialNumber || null,
           sdkVersion: payload.sdkVersion || null,
           checkedAt: new Date().toISOString(),
-          code: connected ? 'ONLINE' : (payload.code || 'DEVICE_OFFLINE'),
+          code: connected ? 'READY' : (payload.code || 'DEVICE_OFFLINE'),
+          connectionState: connected ? 'READY' : 'ERROR',
+          ready: connected,
+          adapterReachable: true,
+          rdServiceAvailable: connected,
+          deviceDetected: connected,
+          deviceIdentified: connected,
           adapter: { configured: true, online: true, code: payload.code || null }
         };
       } catch (error) {
@@ -147,6 +155,12 @@ class MantraAvdmProvider extends FingerprintProvider {
           configured: true,
           checkedAt: new Date().toISOString(),
           code: error.code || 'FINGERPRINT_ADAPTER_OFFLINE',
+          connectionState: 'DISCONNECTED',
+          ready: false,
+          adapterReachable: false,
+          rdServiceAvailable: false,
+          deviceDetected: false,
+          deviceIdentified: false,
           adapter: { configured: true, online: false, code: error.code || null }
         };
       }
@@ -165,7 +179,13 @@ class MantraAvdmProvider extends FingerprintProvider {
         serialNumber: avdm.serialNumber || null,
         sdkVersion: avdm.sdkVersion || null,
         checkedAt: new Date().toISOString(),
-        code: connected ? 'ONLINE' : 'DEVICE_OFFLINE',
+        code: connected ? 'READY' : 'DEVICE_OFFLINE',
+        connectionState: connected ? 'READY' : 'ERROR',
+        ready: connected,
+        adapterReachable: false,
+        rdServiceAvailable: true,
+        deviceDetected: connected,
+        deviceIdentified: connected,
         adapter: { configured: false, online: null, code: null }
       };
     } catch (error) {
@@ -174,6 +194,12 @@ class MantraAvdmProvider extends FingerprintProvider {
         connected: false,
         checkedAt: new Date().toISOString(),
         code: error.code || 'DEVICE_OFFLINE',
+        connectionState: 'DISCONNECTED',
+        ready: false,
+        adapterReachable: false,
+        rdServiceAvailable: false,
+        deviceDetected: false,
+        deviceIdentified: false,
         adapter: { configured: false, online: null, code: null }
       };
     }
@@ -181,6 +207,20 @@ class MantraAvdmProvider extends FingerprintProvider {
   }
 
   async capture() {
+    const readiness = await this.status();
+    if (!readiness.ready && !readiness.connected) {
+      throw new FingerprintError('Fingerprint scanner is not ready for capture.', {
+        code: readiness.code || 'DEVICE_NOT_READY',
+        statusCode: 503,
+        details: {
+          connectionState: readiness.connectionState || 'ERROR',
+          adapterReachable: readiness.adapterReachable === true,
+          rdServiceAvailable: readiness.rdServiceAvailable === true,
+          deviceDetected: readiness.deviceDetected === true,
+          deviceIdentified: readiness.deviceIdentified === true
+        }
+      });
+    }
     if (this.adapterUrl) {
       const payload = await this.adapterRequest('/capture', {
         deviceType: this.deviceType,
@@ -238,12 +278,23 @@ class MantraAvdmProvider extends FingerprintProvider {
 
   async match(storedTemplate, liveTemplate) {
     if (this.adapterUrl) {
-      const payload = await this.adapterRequest('/verify', {
-        deviceType: this.deviceType,
-        device: 'MFS110',
-        storedTemplate,
-        liveTemplate
-      });
+      let payload;
+      try {
+        payload = await this.adapterRequest('/match', {
+          deviceType: this.deviceType,
+          device: 'MFS110',
+          storedTemplate,
+          liveTemplate
+        });
+      } catch (error) {
+        if (![404, 405].includes(Number(error.statusCode))) throw error;
+        payload = await this.adapterRequest('/verify', {
+          deviceType: this.deviceType,
+          device: 'MFS110',
+          storedTemplate,
+          liveTemplate
+        });
+      }
       return {
         matched: payload.matched === true || payload.match === true,
         score: Number(payload.score) || 0,
@@ -257,6 +308,17 @@ class MantraAvdmProvider extends FingerprintProvider {
       matched,
       score: matched ? 100 : 0,
       threshold
+    };
+  }
+
+  async diagnostic() {
+    const status = await this.status();
+    return {
+      ...status,
+      safeDiagnostic: true,
+      captureEndpoint: this.adapterUrl ? `${this.adapterUrl}/capture` : 'MANTRA_L1_AVDM_CAPTURE',
+      matchEndpoint: this.adapterUrl ? `${this.adapterUrl}/match` : null,
+      rawBiometricReturned: false
     };
   }
 }

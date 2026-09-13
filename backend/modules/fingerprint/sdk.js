@@ -24,6 +24,15 @@ class FingerprintBridgeClient {
     return this.lastStatus;
   }
 
+  async diagnostic() {
+    if (typeof this.provider.diagnostic === 'function') {
+      this.lastStatus = await this.provider.diagnostic();
+    } else {
+      this.lastStatus = await this.provider.status();
+    }
+    return this.lastStatus;
+  }
+
   async capture() {
     return this.provider.capture();
   }

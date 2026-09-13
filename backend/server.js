@@ -6986,8 +6986,9 @@ app.post(['/api/gate/otp/generate', '/api/gate/generate-otp'], authenticateJWT, 
     return res.status(400).json({ success: false, error: 'Invalid gate OTP purpose' });
   }
 
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const normRoll = normalizeRoll(req.body.roll || req.body.studentId || req.body.cadetId);
+  const identityInput = String(req.body.email || req.body.roll || req.body.studentId || req.body.cadetId || '').trim();
+  const email = String(req.body.email || (identityInput.includes('@') ? identityInput : '')).trim().toLowerCase();
+  const normRoll = email ? '' : normalizeRoll(identityInput);
   const cadetSelectors = [
     { roll: normRoll },
     { studentId: normRoll },
@@ -7054,8 +7055,9 @@ app.post(['/api/gate/otp/generate', '/api/gate/generate-otp'], authenticateJWT, 
 app.post(['/api/gate/otp/verify', '/api/gate/verify-otp'], authenticateJWT, requireOfficer, asyncHandler(async (req, res) => {
   const otp = String(req.body.otp || '').trim();
   const purpose = String(req.body.purpose || 'VERIFY').toUpperCase();
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const normRoll = normalizeRoll(req.body.roll || req.body.studentId);
+  const identityInput = String(req.body.email || req.body.roll || req.body.studentId || '').trim();
+  const email = String(req.body.email || (identityInput.includes('@') ? identityInput : '')).trim().toLowerCase();
+  const normRoll = email ? '' : normalizeRoll(identityInput);
   if (!otp || otp.length !== 6) {
     return res.status(400).json({ success: false, error: 'A valid 6-digit OTP is required' });
   }

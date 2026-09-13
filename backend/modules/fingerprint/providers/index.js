@@ -4,9 +4,8 @@ const { FingerprintError } = require('../utils');
 
 function createFingerprintProvider(options = {}) {
   const explicit = String(process.env.FINGERPRINT_PROVIDER || '').trim().toLowerCase();
-  const hasBridge = !!String(process.env.MANTRA_MFS110_BRIDGE_URL || '').trim();
 
-  if (explicit === 'bridge' || hasBridge) {
+  if (explicit === 'bridge') {
     return new BridgeFingerprintProvider(options);
   }
 

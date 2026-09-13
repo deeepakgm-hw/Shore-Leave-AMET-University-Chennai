@@ -5,7 +5,7 @@ const http = require('http');
 const express = require('express');
 
 const DEFAULT_AVDM_URL = 'http://127.0.0.1:11100';
-const DEFAULT_PORT = 8791;
+const DEFAULT_PORT = 11111;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 const app = express();
@@ -14,6 +14,11 @@ app.use(express.json({ limit: '256kb' }));
 const port = Number(process.env.FINGERPRINT_LOCAL_ADAPTER_PORT || DEFAULT_PORT);
 const avdmUrl = String(process.env.MANTRA_MFS110_AVDM_URL || DEFAULT_AVDM_URL).replace(/\/+$/, '');
 const timeoutMs = Math.max(3_000, Number(process.env.FINGERPRINT_CAPTURE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS);
+
+function fpLog(message, details = null) {
+  const suffix = details ? ` ${JSON.stringify(details)}` : '';
+  console.log(`[FP] ${message}${suffix}`);
+}
 
 function xmlValue(xml, tagName) {
   const match = String(xml || '').match(new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, 'i'));
@@ -55,8 +60,14 @@ async function fetchWithTimeout(url, options = {}) {
   } catch (error) {
     if (error.name === 'AbortError') {
       const timeoutError = new Error(`Mantra runtime timed out after ${timeoutMs}ms.`);
-      timeoutError.code = 'FINGERPRINT_ADAPTER_TIMEOUT';
+      timeoutError.code = 'RD_SERVICE_TIMEOUT';
       throw timeoutError;
+    }
+    if (['ECONNREFUSED', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT'].includes(error.code) || /fetch failed/i.test(error.message || '')) {
+      const rdError = new Error('Mantra RD service is unavailable on the configured local port.');
+      rdError.code = 'RD_SERVICE_UNAVAILABLE';
+      rdError.details = { avdmUrl };
+      throw rdError;
     }
     throw error;
   } finally {
@@ -98,6 +109,7 @@ function captureHttpRequest(url, body, requestTimeoutMs = timeoutMs) {
 }
 
 async function readDeviceInfo() {
+  fpLog('RD service device info requested', { avdmUrl });
   const response = await fetchWithTimeout(avdmUrl, { method: 'DEVICEINFO' });
   const xml = await response.text();
   if (!response.ok) {
@@ -127,11 +139,12 @@ async function readDeviceInfo() {
     serialNumber: serialNumber || null,
     sdkVersion: xmlAttr(xml, 'rdsVer') || xmlAttr(xml, 'version') || 'Mantra L1 AVDM',
     checkedAt: new Date().toISOString(),
-    code: connected ? 'ONLINE' : 'DEVICE_OFFLINE'
+    code: connected ? 'READY_FOR_CAPTURE' : 'DEVICE_NOT_DETECTED'
   };
 }
 
 async function discoverCaptureEndpoints() {
+  fpLog('RD service discovery requested', { avdmUrl });
   try {
     const response = await fetchWithTimeout(avdmUrl, { method: 'RDSERVICE' });
     const xml = await response.text();
@@ -189,20 +202,23 @@ function normalizeCapturedTemplate(xml) {
 }
 
 async function captureFromAvdm(body = {}) {
+  fpLog('Capture requested');
   const device = await readDeviceInfo();
   if (!device.connected) {
     const error = new Error('Mantra MFS110 device is offline.');
-    error.code = 'FINGERPRINT_DEVICE_OFFLINE';
+    error.code = 'DEVICE_NOT_DETECTED';
     throw error;
   }
 
   const captureTimeout = Math.max(3_000, Number(body.timeoutMs) || timeoutMs);
   const pidOptions = buildPidOptions({ timeoutMs: captureTimeout });
   const captureUrls = await discoverCaptureEndpoints();
+  fpLog('Waiting for finger', { timeoutMs: captureTimeout, captureUrls });
 
   const failures = [];
   for (const url of captureUrls) {
     try {
+      fpLog('Capture request sent', { url });
       const response = await captureHttpRequest(url, pidOptions, captureTimeout + 1500);
       const xml = response.text;
       if (!response.ok) {
@@ -210,6 +226,12 @@ async function captureFromAvdm(body = {}) {
         continue;
       }
       const capture = normalizeCapturedTemplate(xml);
+      fpLog('Capture completed', {
+        provider: device.provider,
+        deviceModel: device.deviceModel,
+        quality: capture.quality,
+        format: capture.templateVersion
+      });
       return {
         success: true,
         status: 'CAPTURED',
@@ -225,17 +247,24 @@ async function captureFromAvdm(body = {}) {
         capturedAt: new Date().toISOString()
       };
     } catch (error) {
+      fpLog('ERROR: capture path failed', { url, code: error.code || error.name, message: error.message });
       failures.push({ url, code: error.code || error.name, message: error.message });
     }
   }
 
   const error = new Error('Mantra runtime was reachable, but fingerprint capture did not complete.');
-  error.code = 'FINGERPRINT_CAPTURE_FAILED';
+  error.code = 'CAPTURE_FAILED';
   error.details = failures;
   throw error;
 }
 
 function verifyTemplates({ storedTemplate, liveTemplate, threshold }) {
+  if (!['1', 'true', 'yes'].includes(String(process.env.FINGERPRINT_ALLOW_TEMPLATE_HASH_MATCH || 'false').toLowerCase())) {
+    const error = new Error('The local Mantra adapter can capture PID data, but no real biometric matching SDK is configured. Configure a provider with a supported /match endpoint before enabling gate fingerprint recognition.');
+    error.code = 'FINGERPRINT_MATCH_PROVIDER_UNAVAILABLE';
+    error.statusCode = 501;
+    throw error;
+  }
   if (!storedTemplate || !liveTemplate) {
     const error = new Error('Both storedTemplate and liveTemplate are required.');
     error.code = 'FINGERPRINT_VERIFY_PAYLOAD_INVALID';
@@ -278,6 +307,21 @@ app.get('/status', asyncRoute(async (_req, res) => {
   res.json(await readDeviceInfo());
 }));
 
+app.get('/diagnostic', asyncRoute(async (_req, res) => {
+  const status = await readDeviceInfo();
+  res.json({
+    ...status,
+    safeDiagnostic: true,
+    adapterReachable: true,
+    rdServiceAvailable: status.connected === true,
+    deviceDetected: status.connected === true,
+    deviceIdentified: status.connected === true,
+    ready: status.connected === true,
+    captureEndpoint: 'discovered-via-RDSERVICE',
+    rawBiometricReturned: false
+  });
+}));
+
 app.post('/capture', asyncRoute(async (req, res) => {
   res.json(await captureFromAvdm(req.body || {}));
 }));
@@ -287,6 +331,5 @@ app.post('/verify', asyncRoute(async (req, res) => {
 }));
 
 app.listen(port, '127.0.0.1', () => {
-  console.log(`[FingerprintAdapter] Listening on http://127.0.0.1:${port}`);
-  console.log(`[FingerprintAdapter] Mantra AVDM URL: ${avdmUrl}`);
+  fpLog('Adapter started', { url: `http://127.0.0.1:${port}`, avdmUrl });
 });
