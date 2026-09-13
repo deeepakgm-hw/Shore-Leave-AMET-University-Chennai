@@ -83,7 +83,31 @@ type CadetDashboardResponse = {
   leaveBlock?: { blocked?: boolean; reason?: string; blockedAt?: string | null; blockedUntil?: string | null };
   history?: DashboardLeaveRow[];
   shoreLeaveHistory?: DashboardLeaveRow[];
-  gamification?: { leaveTokens?: number; maxLeaveTokens?: number };
+  gamification?: {
+    leaveTokens?: number;
+    maxLeaveTokens?: number;
+    leaveTokenBalance?: LeaveTokenBalance;
+  };
+};
+
+type LeaveTokenBalance = {
+  month?: number;
+  year?: number;
+  monthLabel?: string;
+  monthlyAllocation?: number;
+  allocation?: number;
+  used?: number;
+  consumed?: number;
+  reserved?: number;
+  available?: number;
+  expired?: number;
+  transactions?: Array<{
+    id?: string;
+    type?: string;
+    amount?: number;
+    reason?: string;
+    timestamp?: string;
+  }>;
 };
 
 type DashboardLeaveRow = {
@@ -174,6 +198,7 @@ function normalizeCadetDashboardProfile(data: CadetDashboardResponse): Cadet {
     face_enrolled: faceEnrolled,
     leave_tokens: data.gamification?.leaveTokens ?? 4,
     max_leave_tokens: data.gamification?.maxLeaveTokens ?? 8,
+    leave_token_balance: data.gamification?.leaveTokenBalance,
   };
 }
 
@@ -404,7 +429,7 @@ function CadetDashboard() {
               transition={{ duration: 0.25 }}
             >
               {tab === "home" && (requestsLoading ? <div className="py-16 text-center text-sm">Loading leave requests…</div> : <HomeTab name={profileName} requests={requests} onApply={() => setTab("leave")} onOpenLeave={openLeave} onOpenGatePass={openGatePass} onOpenFaceEnrollment={openFaceEnrollment} onViewActivity={() => setTab("leave")} onSendGatePassEmail={sendGatePassEmail} onDownloadGatePass={downloadGatePass} gateEmailBusy={gateEmailBusy} leaveBlocked={leaveBlocked} />)}
-              {tab === "leave" && <LeaveTab cadetId={cadet?.id} requests={requests} leaveBlocked={leaveBlocked} blockReason={cadet?.leave_blocked_reason ?? undefined} leaveTokens={cadet?.leave_tokens ?? 4} maxLeaveTokens={cadet?.max_leave_tokens ?? 8} />}
+              {tab === "leave" && <LeaveTab cadetId={cadet?.id} requests={requests} leaveBlocked={leaveBlocked} blockReason={cadet?.leave_blocked_reason ?? undefined} leaveTokens={cadet?.leave_tokens ?? 4} maxLeaveTokens={cadet?.max_leave_tokens ?? 28} tokenBalance={(cadet as Cadet & { leave_token_balance?: LeaveTokenBalance } | undefined)?.leave_token_balance} />}
               {tab === "rewards" && <RewardsTab />}
               {tab === "ranks" && <RanksTab name={profileName} />}
               {tab === "profile" && <ProfileTab name={profileName} rollNo={rollNo} department={department} faceEnrolled={!!cadet?.face_enrolled} requests={requests} onFaceEnroll={openFaceEnrollment} onEditProfile={editProfile} onSignOut={signOut} onDeleteAccount={deleteAccount} />}
@@ -775,7 +800,7 @@ function ActivityFeed({ onSeeAll }: { onSeeAll: () => void }) {
 }
 
 /* ================================ LEAVE TAB ============================== */
-function LeaveTab({ cadetId, requests, leaveBlocked, blockReason, leaveTokens, maxLeaveTokens }: { cadetId?: string; requests: LeaveRequest[]; leaveBlocked: boolean; blockReason?: string; leaveTokens: number; maxLeaveTokens: number }) {
+function LeaveTab({ cadetId, requests, leaveBlocked, blockReason, leaveTokens, maxLeaveTokens, tokenBalance }: { cadetId?: string; requests: LeaveRequest[]; leaveBlocked: boolean; blockReason?: string; leaveTokens: number; maxLeaveTokens: number; tokenBalance?: LeaveTokenBalance }) {
   const grouped = useMemo(() => {
     const g: Record<string, LeaveRequest[]> = {};
     requests.forEach(r => {
@@ -803,7 +828,18 @@ function LeaveTab({ cadetId, requests, leaveBlocked, blockReason, leaveTokens, m
             <div className="text-[10px] font-medium uppercase tracking-widest text-[#F5EFE6]/50">Available</div>
           </div>
         </div>
+        <div className="mt-5 grid grid-cols-3 gap-2 border-t border-[#F5EFE6]/10 pt-4 text-center">
+          <TokenMiniStat label="Used" value={tokenBalance?.used ?? 0} />
+          <TokenMiniStat label="Reserved" value={tokenBalance?.reserved ?? 0} />
+          <TokenMiniStat label="Expired" value={tokenBalance?.expired ?? 0} />
+        </div>
+        <div className="mt-3 flex items-center justify-between rounded-2xl bg-[#F5EFE6]/8 px-3 py-2 text-[11px] font-semibold text-[#F5EFE6]/70">
+          <span>Current Month</span>
+          <span>{tokenBalance?.monthLabel ?? "Current month"}</span>
+        </div>
       </div>
+
+      {tokenBalance && <TokenDetails balance={tokenBalance} />}
 
       {leaveBlocked ? <LeaveBlockedPanel reason={blockReason} /> : cadetId && <NewRequestForm cadetId={cadetId} />}
 
@@ -835,6 +871,78 @@ function LeaveTab({ cadetId, requests, leaveBlocked, blockReason, leaveTokens, m
           </div>
         ))}
       </section>
+    </div>
+  );
+}
+
+function TokenMiniStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-2xl bg-[#F5EFE6]/8 px-2 py-3">
+      <div className="text-[18px] font-extrabold leading-none">{value}</div>
+      <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[#F5EFE6]/45">{label}</div>
+    </div>
+  );
+}
+
+function TokenDetails({ balance }: { balance: LeaveTokenBalance }) {
+  const transactions = balance.transactions ?? [];
+  return (
+    <section className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/50">Token details</div>
+          <h2 className="mt-1 text-[18px] font-extrabold">Current Month</h2>
+          <p className="mt-1 text-[12px] font-medium text-[#17061E]/55">{balance.monthLabel}</p>
+        </div>
+        <div className="rounded-2xl bg-[#F5EFE6] px-3 py-2 text-right">
+          <div className="text-[22px] font-extrabold leading-none">{balance.available ?? 0}</div>
+          <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#17061E]/45">Available</div>
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-2 text-[12px]">
+        <ReviewMetric label="Monthly Allocation" value={balance.monthlyAllocation ?? balance.allocation ?? 28} />
+        <ReviewMetric label="Consumed" value={balance.consumed ?? balance.used ?? 0} />
+        <ReviewMetric label="Reserved" value={balance.reserved ?? 0} />
+        <ReviewMetric label="Expired" value={balance.expired ?? 0} />
+      </div>
+      <div className="mt-4 border-t border-[#17061E]/8 pt-3">
+        <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.18em] text-[#17061E]/45">Transaction history</div>
+        {transactions.length === 0 ? (
+          <p className="rounded-2xl bg-[#F5EFE6] p-3 text-[12px] text-[#17061E]/55">No token transactions recorded yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {transactions.slice(0, 6).map((entry, index) => (
+              <div key={entry.id ?? index} className="flex items-center justify-between rounded-2xl bg-[#F5EFE6] px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-[12px] font-bold">{entry.reason || String(entry.type || "").replace(/_/g, " ")}</div>
+                  <div className="text-[10px] text-[#17061E]/50">{entry.timestamp ? new Date(entry.timestamp).toLocaleDateString() : ""}</div>
+                </div>
+                <div className={`text-[12px] font-extrabold ${(entry.amount ?? 0) >= 0 ? "text-[#3B7A57]" : "text-[#C05B4D]"}`}>
+                  {(entry.amount ?? 0) > 0 ? "+" : ""}{entry.amount ?? 0}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ReviewMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-2xl bg-[#F5EFE6] p-3">
+      <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#17061E]/45">{label}</div>
+      <div className="mt-1 text-[18px] font-extrabold">{value}</div>
+    </div>
+  );
+}
+
+function TokenQuoteStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-2xl bg-white p-3">
+      <div className="text-[16px] font-extrabold">{value}</div>
+      <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[#17061E]/45">{label}</div>
     </div>
   );
 }
@@ -1558,12 +1666,35 @@ function NewRequestForm({ cadetId }: { cadetId: string }) {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [reason, setReason] = useState("");
-  const [type, setType] = useState<"Shore" | "Special" | "Medical">("Special");
+  const [type, setType] = useState("Home Leave");
   const [selectedDocument, setSelectedDocument] = useState<LeaveDocumentPayload | null>(null);
   const [documentError, setDocumentError] = useState("");
   const [uploadProgress, setUploadProgress] = useState(0);
-  const cost = type === "Shore" ? 1 : type === "Special" ? 2 : 0;
-  const documentRequired = type === "Special" || type === "Medical";
+  const documentRequired = type === "Medical Leave";
+  const tokenRule = type === "Home Leave" || type === "Personal Leave"
+    ? "1 token / chargeable day"
+    : type === "Sunday Shore Leave"
+      ? "1 token / Sunday"
+      : "0 tokens";
+  const quoteQuery = useQuery({
+    queryKey: ["cadet", "leave-token-quote", type, start, end],
+    enabled: Boolean(start && end),
+    queryFn: () => apiRequest<{
+      calculation: { requiredTokens: number; message?: string };
+      balance: LeaveTokenBalance;
+      remainingAfterApproval: number;
+    }>(endpoints.cadet.leaveTokenQuote, {
+      method: "POST",
+      body: JSON.stringify({
+        leaveType: type,
+        fromDate: start,
+        toDate: end,
+        fromTime: start ? new Date(start).toTimeString().slice(0, 5) : "",
+        toTime: end ? new Date(end).toTimeString().slice(0, 5) : "",
+      }),
+    }),
+    retry: false,
+  });
 
   const mut = useMutation({
     mutationFn: async () => {
@@ -1576,7 +1707,7 @@ function NewRequestForm({ cadetId }: { cadetId: string }) {
       await apiRequest<MutationResult>(endpoints.leaveRequests, {
         method: "POST",
         body: JSON.stringify({
-          leaveType: type === "Medical" ? "Medical" : type === "Special" ? "Special Leave" : "Others",
+          leaveType: type,
           fromDate: from.toISOString(),
           toDate: to.toISOString(),
           fromTime: from.toTimeString().slice(0, 5),
@@ -1597,6 +1728,7 @@ function NewRequestForm({ cadetId }: { cadetId: string }) {
       setUploadProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
       qc.invalidateQueries({ queryKey: queryKeys.cadet.leaveRequests(cadetId) });
+      qc.invalidateQueries({ queryKey: ["cadet", "leave-token-quote"] });
     },
     onError: (error: unknown) => {
       setUploadProgress(0);
@@ -1630,12 +1762,12 @@ function NewRequestForm({ cadetId }: { cadetId: string }) {
     <form onSubmit={(e) => { e.preventDefault(); mut.mutate(); }} className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
       <div className="flex items-center justify-between">
         <h2 className="text-[15px] font-bold">Apply for leave</h2>
-        <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#17061E]/55"><Coins className="h-3 w-3" /> {cost} coin{cost !== 1 ? "s" : ""}</div>
+        <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#17061E]/55"><Coins className="h-3 w-3" /> {tokenRule}</div>
       </div>
-      <div className="mt-3 flex gap-1.5 rounded-full bg-[#F5EFE6] p-1">
-        {(["Shore", "Special", "Medical"] as const).map(t => (
+      <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-[24px] bg-[#F5EFE6] p-1">
+        {(["Home Leave", "Medical Leave", "Emergency Leave", "Personal Leave", "Sunday Shore Leave"] as const).map(t => (
           <button type="button" key={t} onClick={() => setType(t)}
-            className={`flex-1 rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${type === t ? "bg-[#17061E] text-[#F5EFE6]" : "text-[#17061E]/60"}`}>
+            className={`rounded-[18px] px-3 py-2 text-[11px] font-semibold transition ${type === t ? "bg-[#17061E] text-[#F5EFE6]" : "text-[#17061E]/60"}`}>
             {t}
           </button>
         ))}
@@ -1646,6 +1778,27 @@ function NewRequestForm({ cadetId }: { cadetId: string }) {
         <div className="grid grid-cols-2 gap-3">
           <KField label="Start" value={start} onChange={setStart} required type="datetime-local" />
           <KField label="End" value={end} onChange={setEnd} required type="datetime-local" />
+        </div>
+        <div className="rounded-[24px] bg-[#F5EFE6] p-4">
+          <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#17061E]/55">Token calculation</div>
+          {quoteQuery.isError ? (
+            <div className="mt-2 rounded-2xl bg-[#F2A488]/40 p-3 text-[12px] font-semibold text-[#17061E]">
+              {getErrorMessage(quoteQuery.error, "Token calculation is unavailable.")}
+            </div>
+          ) : quoteQuery.data ? (
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+              <TokenQuoteStat label="Required" value={quoteQuery.data.calculation.requiredTokens} />
+              <TokenQuoteStat label="Available" value={quoteQuery.data.balance.available ?? 0} />
+              <TokenQuoteStat label="Remaining" value={quoteQuery.data.remainingAfterApproval} />
+            </div>
+          ) : (
+            <p className="mt-2 text-[12px] font-medium text-[#17061E]/55">Select dates to see the authoritative backend token calculation.</p>
+          )}
+          {type === "Sunday Shore Leave" && (
+            <p className="mt-3 rounded-2xl bg-white px-3 py-2 text-[12px] font-semibold text-[#17061E]/70">
+              Sunday Shore Leave is available only on Sundays.
+            </p>
+          )}
         </div>
         <div className="rounded-[24px] bg-[#F5EFE6] p-4">
           <div className="flex items-start justify-between gap-3">

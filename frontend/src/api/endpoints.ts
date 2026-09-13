@@ -41,6 +41,8 @@ export const endpoints = {
     profile: "/api/cadet/dashboard",
     leaveRequests: "/api/cadet/dashboard",
     shoreLeaveRequest: "/api/cadet/shore-leave-request",
+    leaveTokens: "/api/cadet/leave-tokens",
+    leaveTokenQuote: "/api/cadet/leave-token-quote",
     sendGatePassEmail: "/api/cadet/send-gate-pass-email",
   },
   cadets: { byRoll: (roll: string) => `/api/cadets/${encode(roll)}` },
