@@ -39,7 +39,7 @@ function renderGatePassEmailHtml(pass) {
         <div style="padding:26px 28px;">
           <p style="margin:0 0 18px;font-size:15px;line-height:1.65;">
             Your leave request has been approved by the Duty Officer. Your gate pass PDF is attached to this email.
-            Primary gate authentication is fingerprint verification. Face verification is available as fallback.
+            Primary gate authentication is fingerprint verification. Email verification with OTP is available as fallback.
           </p>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px;">
             <div style="padding:14px 16px;border-radius:14px;background:#f8fafc;border:1px solid #e2e8f0;">
@@ -156,7 +156,7 @@ function createGatePassPdf(pass) {
     doc.fillColor('#9a3412').font('Helvetica-Bold').fontSize(10).text('EMERGENCY VERIFICATION CODE', 68, doc.y + 18);
     doc.fillColor('#10214d').fontSize(22).text(emergencyCode, 68, doc.y + 4);
     doc.fillColor('#475569').font('Helvetica').fontSize(9).text(
-      'For officer use only when fingerprint verification and face fallback are unavailable. Officer must record a reason before using this code.',
+      'For officer use only when fingerprint verification and email OTP fallback are unavailable. Officer must record a reason before using this code.',
       68,
       doc.y + 6,
       { width: 460 }
@@ -166,7 +166,7 @@ function createGatePassPdf(pass) {
     doc.fillColor('#10214d').font('Helvetica-Bold').fontSize(12).text('Authentication hierarchy');
     doc.moveDown(0.4);
     doc.font('Helvetica').fontSize(10).text('1. Fingerprint verification is the primary gate method.');
-    doc.text('2. Face verification is the fallback method.');
+    doc.text('2. Email verification with OTP is the fallback method.');
     doc.text('3. Emergency verification code is used only by an authorized officer with a recorded reason.');
     doc.moveDown(0.7);
     doc.font('Helvetica-Bold').fontSize(12).text('Instructions');

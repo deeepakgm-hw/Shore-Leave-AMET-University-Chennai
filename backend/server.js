@@ -659,7 +659,13 @@ const LeaveRecordSchema = new mongoose.Schema({
   gatePassPdfUrl: String,
   gatePass: Object,
   storageStatus: String,
-  storageUploadedAt: Date
+  storageUploadedAt: Date,
+  gatePassEmailStatus: String,
+  gatePassEmailSentAt: Date,
+  gatePassEmailFailedAt: Date,
+  checkInEmailStatus: String,
+  checkInEmailSentAt: Date,
+  checkInEmailFailedAt: Date
 });
 const LeaveRecord = mongoose.model('LeaveRecord', LeaveRecordSchema);
 
@@ -2246,7 +2252,58 @@ const gateDecisionService = createGateDecisionService({
       }
     });
   },
-  onDecisionApplied: async () => {
+  onDecisionApplied: async (result) => {
+    if (result?.success && result?.action === 'CHECK_OUT' && result?.rollNumber) {
+      await createPersistentNotification({
+        roll: result.rollNumber,
+        payload: {
+          title: 'Shore Leave Started',
+          body: 'Your check-out has been recorded successfully. Your shore leave is now active.',
+          type: 'gate_checkout',
+          priority: 'high',
+          entity: {
+            action: 'CHECK_OUT',
+            passId: result.passId || null,
+            destination: result.destination || null,
+            checkOutTime: result.timeOut || null,
+            gatePassUrl: result.gatePassUrl || null
+          }
+        },
+        actor: 'gate-terminal',
+        dedupeKey: `gate:checkout:${result.rollNumber}:${result.passId || result.checkedOutAt || 'active'}`
+      }).catch(error => logError('[GATE] Checkout notification failed', error));
+      await AuditLog.create({
+        action: 'CHECKOUT_NOTIFICATION_CREATED',
+        roll: result.rollNumber,
+        details: { passId: result.passId || null }
+      }).catch(() => {});
+      emitCadetEvent(result.rollNumber, 'gate:checkout-success', result);
+    }
+    if (result?.success && result?.action === 'CHECK_IN' && result?.rollNumber) {
+      await createPersistentNotification({
+        roll: result.rollNumber,
+        payload: {
+          title: 'Welcome Back to Campus',
+          body: 'Your check-in has been recorded successfully. Welcome back to AMET IST.',
+          type: 'gate_checkin',
+          priority: 'high',
+          entity: {
+            action: 'CHECK_IN',
+            checkInTime: result.timeIn || null,
+            leaveType: result.leaveType || null,
+            returnStatus: result.returnStatus || null
+          }
+        },
+        actor: 'gate-terminal',
+        dedupeKey: `gate:checkin:${result.rollNumber}:${result.timeIn || 'returned'}`
+      }).catch(error => logError('[GATE] Checkin notification failed', error));
+      await AuditLog.create({
+        action: 'CHECKIN_NOTIFICATION_CREATED',
+        roll: result.rollNumber,
+        details: { timeIn: result.timeIn || null, returnStatus: result.returnStatus || null }
+      }).catch(() => {});
+      emitCadetEvent(result.rollNumber, 'gate:checkin-success', result);
+    }
     if (typeof dashboardSnapshotCache !== 'undefined') dashboardSnapshotCache.expiresAt = 0;
     const snapshot = await buildDashboardSnapshot();
     io.to('admin').emit('stats:update', snapshot.stats);
@@ -3873,7 +3930,7 @@ async function sendLeaveSubmittedEmail(req, cadet, leaveRequest) {
 }
 
 async function sendWelcomeBackEmail(cadet, leaveRecord) {
-  const subject = 'Welcome Back to Campus';
+  const subject = 'AMET IST - Welcome Back to Campus';
   const text =
     `Dear ${cadet.name || cadet.roll},\n\n` +
     `Welcome back to campus.\n` +
@@ -3897,7 +3954,17 @@ async function sendWelcomeBackEmail(cadet, leaveRecord) {
       </div>
     </div>`;
 
-  return sendSystemEmail({ to: cadet.email, subject, text, html });
+  const result = await sendSystemEmail({ to: cadet.email, subject, text, html });
+  leaveRecord.checkInEmailStatus = result.deliveryMode === 'email' ? 'CHECKIN_EMAIL_SENT' : result.deliveryMode === 'skipped' ? 'CHECKIN_EMAIL_SKIPPED' : 'CHECKIN_EMAIL_FAILED';
+  if (result.deliveryMode === 'email') leaveRecord.checkInEmailSentAt = new Date();
+  if (result.deliveryMode === 'failed_queued') leaveRecord.checkInEmailFailedAt = new Date();
+  await leaveRecord.save().catch(() => {});
+  await AuditLog.create({
+    action: result.deliveryMode === 'email' ? 'CHECKIN_WELCOME_EMAIL_SENT' : 'CHECKIN_WELCOME_EMAIL_FAILED',
+    roll: cadet.roll,
+    details: { leaveId: String(leaveRecord._id), passId: leaveRecord.passId || null, deliveryMode: result.deliveryMode }
+  }).catch(() => {});
+  return result;
 }
 
 async function sendShoreLeaveApprovedEmail(req, cadet, leaveRecord) {
@@ -4105,10 +4172,18 @@ async function issueGatePassForCheckout(req, cadet, leaveRequest, {
     beforeSend: async ({ assets, gatePassUrl }) => {
       applyGatePassAssetMetadata(leaveRequest, assets);
       leaveRequest.gatePassUrl = gatePassUrl;
-      leaveRequest.gatePassEmailSentAt = new Date();
       if (persist) await persist({ assets, gatePassUrl });
     }
   });
+  leaveRequest.gatePassEmailStatus = delivery.emailResult?.deliveryMode === 'email' ? 'GATE_PASS_EMAIL_SENT' : delivery.emailResult?.deliveryMode === 'skipped' ? 'GATE_PASS_EMAIL_SKIPPED' : 'GATE_PASS_EMAIL_FAILED';
+  if (delivery.emailResult?.deliveryMode === 'email') leaveRequest.gatePassEmailSentAt = new Date();
+  if (delivery.emailResult?.deliveryMode === 'failed_queued') leaveRequest.gatePassEmailFailedAt = new Date();
+  if (persist) await persist({ gatePassUrl: delivery.gatePassUrl });
+  await AuditLog.create({
+    action: delivery.emailResult?.deliveryMode === 'email' ? 'GATE_PASS_EMAIL_SENT' : 'GATE_PASS_EMAIL_FAILED',
+    roll: cadet.roll,
+    details: { passId: leaveRequest.passId, deliveryMode: delivery.emailResult?.deliveryMode || 'unknown' }
+  }).catch(() => {});
 
   return delivery;
 }
@@ -6911,15 +6986,17 @@ app.post(['/api/gate/otp/generate', '/api/gate/generate-otp'], authenticateJWT, 
     return res.status(400).json({ success: false, error: 'Invalid gate OTP purpose' });
   }
 
+  const email = String(req.body.email || '').trim().toLowerCase();
   const normRoll = normalizeRoll(req.body.roll || req.body.studentId || req.body.cadetId);
   const cadetSelectors = [
     { roll: normRoll },
     { studentId: normRoll },
     { serialNo: normRoll },
+    email ? { email } : null,
     { _id: mongoose.Types.ObjectId.isValid(req.body.cadetId) ? req.body.cadetId : undefined }
-  ].filter((item) => Object.values(item)[0]);
+  ].filter((item) => item && Object.values(item)[0]);
   if (cadetSelectors.length === 0) {
-    return res.status(400).json({ success: false, error: 'Cadet roll number or id is required' });
+    return res.status(400).json({ success: false, error: 'Cadet email, roll number, or id is required' });
   }
   const cadet = await Cadet.findOne({ $or: cadetSelectors });
   if (!cadet) {
@@ -6977,6 +7054,7 @@ app.post(['/api/gate/otp/generate', '/api/gate/generate-otp'], authenticateJWT, 
 app.post(['/api/gate/otp/verify', '/api/gate/verify-otp'], authenticateJWT, requireOfficer, asyncHandler(async (req, res) => {
   const otp = String(req.body.otp || '').trim();
   const purpose = String(req.body.purpose || 'VERIFY').toUpperCase();
+  const email = String(req.body.email || '').trim().toLowerCase();
   const normRoll = normalizeRoll(req.body.roll || req.body.studentId);
   if (!otp || otp.length !== 6) {
     return res.status(400).json({ success: false, error: 'A valid 6-digit OTP is required' });
@@ -6987,6 +7065,7 @@ app.post(['/api/gate/otp/verify', '/api/gate/verify-otp'], authenticateJWT, requ
     expiresAt: { $gt: new Date() },
     ...(req.body.sessionToken ? { sessionToken: req.body.sessionToken } : {}),
     ...(normRoll ? { roll: normRoll } : {}),
+    ...(email ? { email } : {}),
     ...(purpose ? { purpose } : {})
   };
   const gateOtp = await GateOTP.findOne(query).sort({ issuedAt: -1 });
@@ -7019,6 +7098,25 @@ app.post(['/api/gate/otp/verify', '/api/gate/verify-otp'], authenticateJWT, requ
   gateOtp.validation = validation;
   await gateOtp.save();
   await AuditLog.create({ action: 'GATE_OTP_VERIFIED', details: { roll: cadet.roll, purpose: gateOtp.purpose, verifiedBy: req.officer.username } });
+  const direction = gateOtp.purpose === 'CHECK_IN' ? 'CHECK_IN' : gateOtp.purpose === 'CHECK_OUT' ? 'CHECK_OUT' : null;
+  const gate = direction
+    ? await gateDecisionService.processVerifiedIdentity(cadet.roll, direction, {
+        method: 'EMAIL_OTP',
+        actor: req.officer.username,
+        terminal: req.body.terminal || 'Gate Terminal Email OTP',
+        ipAddress: req.ip || req.socket?.remoteAddress || null
+      })
+    : null;
+  if (gate && !gate.success) {
+    return res.status(gate.httpStatus || 403).json({
+      success: false,
+      verified: true,
+      error: gate.message || gate.reason || 'Gate authorization failed',
+      gate,
+      cadet: buildCadetDto(cadet),
+      validation
+    });
+  }
 
   res.json({
     success: true,
@@ -7026,7 +7124,8 @@ app.post(['/api/gate/otp/verify', '/api/gate/verify-otp'], authenticateJWT, requ
     purpose: gateOtp.purpose,
     cadet: buildCadetDto(cadet),
     gatePass: mapCadetForGatePass(cadet),
-    validation
+    validation,
+    gate
   });
 }));
 

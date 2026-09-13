@@ -22,7 +22,11 @@ function requiredString(value, field, maxLength = 160) {
 
 function cadetLookup(value) {
   const cadetId = requiredString(value, 'cadetId', 180);
-  const clauses = [{ roll: cadetId.toUpperCase() }, { studentId: cadetId }];
+  const clauses = [
+    { roll: cadetId.toUpperCase() },
+    { studentId: cadetId },
+    { email: cadetId.toLowerCase() }
+  ];
   if (mongoose.isValidObjectId(cadetId)) clauses.push({ _id: cadetId });
   return { cadetId, query: { $or: clauses } };
 }
