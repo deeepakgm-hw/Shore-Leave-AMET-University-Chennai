@@ -22,6 +22,16 @@ const { createBadgeService, BADGE_DEFINITIONS } = require('./services/badgeServi
 const { createXpService, LEVELS } = require('./services/xpService');
 const { createStreakService } = require('./services/streakService');
 const { createLootService, PRIZE_POOL } = require('./services/lootService');
+const {
+  FINAL_LEAVE_TYPES,
+  LEAVE_TOKEN_POLICY,
+  MONTHLY_LEAVE_TOKEN_ALLOWANCE,
+  calculateRequiredTokens,
+  isFinalLeaveType,
+  monthKeyParts,
+  monthLabel,
+  normalizeLeaveType
+} = require('./services/leaveTokenPolicy');
 const NFCTag = require('./models/NFCTag');
 const NFCCounter = require('./models/NFCCounter');
 const DeviceConfig = require('./models/DeviceConfig');
@@ -653,6 +663,51 @@ const LeaveRecordSchema = new mongoose.Schema({
 });
 const LeaveRecord = mongoose.model('LeaveRecord', LeaveRecordSchema);
 
+const LeaveTokenAllocationSchema = new mongoose.Schema({
+  cadetId: { type: String, required: true, index: true },
+  roll: { type: String, required: true, index: true },
+  year: { type: Number, required: true, index: true },
+  month: { type: Number, required: true, index: true },
+  allocated: { type: Number, required: true, default: MONTHLY_LEAVE_TOKEN_ALLOWANCE },
+  expired: { type: Number, default: 0 },
+  expiredAt: Date,
+  createdAt: { type: Date, default: Date.now },
+  createdBy: { type: String, default: 'system' }
+}, { collection: 'leave_token_allocations' });
+LeaveTokenAllocationSchema.index({ cadetId: 1, year: 1, month: 1 }, { unique: true });
+const LeaveTokenAllocation = mongoose.model('LeaveTokenAllocation', LeaveTokenAllocationSchema);
+
+const LeaveTokenLedgerSchema = new mongoose.Schema({
+  cadetId: { type: String, required: true, index: true },
+  roll: { type: String, required: true, index: true },
+  leaveRequestId: { type: String, default: null, index: true },
+  passId: { type: String, default: null, index: true },
+  amount: { type: Number, required: true },
+  transactionType: {
+    type: String,
+    required: true,
+    enum: [
+      'TOKEN_MONTHLY_ALLOCATION',
+      'TOKEN_RESERVED',
+      'TOKEN_RESERVATION_RELEASED',
+      'TOKEN_CONSUMED',
+      'TOKEN_REFUNDED',
+      'TOKEN_EXPIRED'
+    ],
+    index: true
+  },
+  year: { type: Number, required: true, index: true },
+  month: { type: Number, required: true, index: true },
+  reason: String,
+  actor: { type: String, default: 'system' },
+  idempotencyKey: { type: String, required: true, unique: true },
+  metadata: { type: Object, default: {} },
+  timestamp: { type: Date, default: Date.now, index: true }
+}, { collection: 'leave_token_ledger' });
+LeaveTokenLedgerSchema.index({ cadetId: 1, year: 1, month: 1, timestamp: -1 });
+LeaveTokenLedgerSchema.index({ leaveRequestId: 1, transactionType: 1 });
+const LeaveTokenLedger = mongoose.model('LeaveTokenLedger', LeaveTokenLedgerSchema);
+
 const ChatbotLogSchema = new mongoose.Schema({
   sessionId: String,
   userMessage: String,
@@ -826,7 +881,7 @@ function endOfDay(dateValue) {
 }
 
 function isLeaveTypeValid(leaveType) {
-  return ['Medical', 'Special Leave', 'Others'].includes(leaveType);
+  return isFinalLeaveType(leaveType);
 }
 
 function buildGatePassUrl(req, passId, token) {
@@ -1205,6 +1260,10 @@ async function ensureCoreIndexes() {
   await CadetXpLog.collection.createIndex({ cadetId: 1, action: 1, timestamp: -1 });
   await LeaveRecord.collection.createIndex({ roll: 1, status: 1 });
   await LeaveRecord.collection.createIndex({ createdAt: -1 });
+  await LeaveTokenAllocation.collection.createIndex({ cadetId: 1, year: 1, month: 1 }, { unique: true });
+  await LeaveTokenLedger.collection.createIndex({ idempotencyKey: 1 }, { unique: true });
+  await LeaveTokenLedger.collection.createIndex({ cadetId: 1, year: 1, month: 1, timestamp: -1 });
+  await LeaveTokenLedger.collection.createIndex({ leaveRequestId: 1, transactionType: 1 });
   await OTP.collection.createIndex({ sessionToken: 1 });
   await OTP.collection.createIndex({ expiresAt: 1 });
   await FailedEmail.collection.createIndex({ timestamp: -1 });
@@ -1776,11 +1835,316 @@ const xpService = createXpService({ Cadet, CadetXpLog, sendPushToCadet, emitCade
 const streakService = createStreakService({ Cadet, xpService, badgeService, emitCadetEvent });
 const lootService = createLootService({ Cadet, sendPushToCadet, emitCadetEvent, emitAdminEvent });
 
-function leaveTokenCost(leaveType) {
-  const key = String(leaveType || '').trim().toLowerCase();
-  if (key === 'medical' || key === 'medical leave') return 0;
-  if (key === 'special leave') return 2;
-  return 1;
+function leaveTokenCost(leaveType, fromDate, toDate) {
+  return calculateRequiredTokens({ leaveType, fromDate, toDate }).requiredTokens;
+}
+
+function currentTokenMonth(date = new Date()) {
+  return monthKeyParts(date);
+}
+
+function tokenLedgerAmount(transactionType, amount) {
+  const value = Number(amount || 0);
+  if (['TOKEN_MONTHLY_ALLOCATION', 'TOKEN_RESERVATION_RELEASED', 'TOKEN_REFUNDED'].includes(transactionType)) return value;
+  return -value;
+}
+
+function buildTokenBalanceFromLedger(entries, allocation = MONTHLY_LEAVE_TOKEN_ALLOWANCE) {
+  const totals = {
+    allocation,
+    consumed: 0,
+    reserved: 0,
+    released: 0,
+    refunded: 0,
+    expired: 0
+  };
+  for (const entry of entries || []) {
+    const amount = Number(entry.amount || 0);
+    if (entry.transactionType === 'TOKEN_MONTHLY_ALLOCATION') totals.allocation = amount;
+    if (entry.transactionType === 'TOKEN_RESERVED') totals.reserved += amount;
+    if (entry.transactionType === 'TOKEN_RESERVATION_RELEASED') totals.released += amount;
+    if (entry.transactionType === 'TOKEN_CONSUMED') totals.consumed += amount;
+    if (entry.transactionType === 'TOKEN_REFUNDED') totals.refunded += amount;
+    if (entry.transactionType === 'TOKEN_EXPIRED') totals.expired += amount;
+  }
+  const activeReserved = Math.max(0, totals.reserved - totals.released - totals.consumed);
+  const available = Math.max(0, totals.allocation + totals.refunded - totals.consumed - activeReserved - totals.expired);
+  return {
+    allocation: totals.allocation,
+    used: totals.consumed,
+    consumed: totals.consumed,
+    reserved: activeReserved,
+    available,
+    expired: totals.expired
+  };
+}
+
+async function createTokenLedgerEntry({
+  cadet,
+  leaveRequestId = null,
+  passId = null,
+  amount,
+  transactionType,
+  year,
+  month,
+  reason,
+  actor = 'system',
+  idempotencyKey,
+  metadata = {}
+}) {
+  if (!amount && transactionType !== 'TOKEN_MONTHLY_ALLOCATION') return null;
+  try {
+    return await LeaveTokenLedger.create({
+      cadetId: String(cadet._id || cadet.id || cadet.roll),
+      roll: cadet.roll,
+      leaveRequestId,
+      passId,
+      amount: Math.max(0, Number(amount || 0)),
+      transactionType,
+      year,
+      month,
+      reason,
+      actor,
+      idempotencyKey,
+      metadata
+    });
+  } catch (error) {
+    if (error?.code === 11000) {
+      return LeaveTokenLedger.findOne({ idempotencyKey });
+    }
+    throw error;
+  }
+}
+
+async function ensureMonthlyTokenAllocation(cadet, date = new Date(), actor = 'system') {
+  const { year, month } = currentTokenMonth(date);
+  const cadetId = String(cadet._id || cadet.id || cadet.roll);
+  const allocation = await LeaveTokenAllocation.findOneAndUpdate(
+    { cadetId, year, month },
+    {
+      $setOnInsert: {
+        cadetId,
+        roll: cadet.roll,
+        year,
+        month,
+        allocated: MONTHLY_LEAVE_TOKEN_ALLOWANCE,
+        createdAt: new Date(),
+        createdBy: actor
+      }
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+  await createTokenLedgerEntry({
+    cadet,
+    amount: allocation.allocated,
+    transactionType: 'TOKEN_MONTHLY_ALLOCATION',
+    year,
+    month,
+    reason: `${monthLabel(year, month)} monthly allocation`,
+    actor,
+    idempotencyKey: `allocation:${cadetId}:${year}:${month}`,
+    metadata: { noCarryOver: true }
+  });
+  return allocation;
+}
+
+async function getTokenBalance(cadet, date = new Date()) {
+  const { year, month } = currentTokenMonth(date);
+  const cadetId = String(cadet._id || cadet.id || cadet.roll);
+  const [allocation, entries] = await Promise.all([
+    LeaveTokenAllocation.findOne({ cadetId, year, month }).lean(),
+    LeaveTokenLedger.find({ cadetId, year, month }).sort({ timestamp: -1, _id: -1 }).lean()
+  ]);
+  const balance = buildTokenBalanceFromLedger(entries, allocation?.allocated || 0);
+  return {
+    ...balance,
+    year,
+    month,
+    monthLabel: monthLabel(year, month),
+    monthlyAllocation: allocation?.allocated || 0,
+    transactions: entries.map(entry => ({
+      id: String(entry._id),
+      type: entry.transactionType,
+      amount: tokenLedgerAmount(entry.transactionType, entry.amount),
+      rawAmount: entry.amount,
+      leaveRequestId: entry.leaveRequestId,
+      passId: entry.passId,
+      reason: entry.reason,
+      actor: entry.actor,
+      timestamp: entry.timestamp,
+      metadata: entry.metadata || {}
+    }))
+  };
+}
+
+async function reserveLeaveTokens(cadet, leaveRequest, requiredTokens, actor = 'system') {
+  const amount = Math.max(0, Number(requiredTokens || 0));
+  const { year, month } = currentTokenMonth(leaveRequest.fromDate || new Date());
+  await ensureMonthlyTokenAllocation(cadet, leaveRequest.fromDate || new Date(), actor);
+  if (!amount) return getTokenBalance(cadet, leaveRequest.fromDate || new Date());
+  const balance = await getTokenBalance(cadet, leaveRequest.fromDate || new Date());
+  if (balance.available < amount) {
+    await AuditLog.create({
+      action: 'INSUFFICIENT_TOKEN_ATTEMPT',
+      roll: cadet.roll,
+      details: {
+        leaveRequestId: leaveRequest.requestId,
+        requiredTokens: amount,
+        availableTokens: balance.available,
+        leaveType: leaveRequest.leaveType
+      }
+    });
+    const error = new Error(`You have ${balance.available} tokens available, but this leave requires ${amount} tokens.`);
+    error.status = 400;
+    error.code = 'INSUFFICIENT_LEAVE_TOKENS';
+    error.balance = balance;
+    throw error;
+  }
+  await createTokenLedgerEntry({
+    cadet,
+    leaveRequestId: leaveRequest.requestId,
+    passId: leaveRequest.passId || null,
+    amount,
+    transactionType: 'TOKEN_RESERVED',
+    year,
+    month,
+    reason: `${leaveRequest.leaveType} reservation`,
+    actor,
+    idempotencyKey: `reserve:${cadet.roll}:${leaveRequest.requestId}`,
+    metadata: { leaveType: leaveRequest.leaveType }
+  });
+  await AuditLog.create({
+    action: 'TOKEN_RESERVED',
+    roll: cadet.roll,
+    details: { leaveRequestId: leaveRequest.requestId, tokens: amount, actor, leaveType: leaveRequest.leaveType }
+  });
+  return getTokenBalance(cadet, leaveRequest.fromDate || new Date());
+}
+
+async function consumeReservedLeaveTokens(cadet, leaveRequest, actor = 'system') {
+  const amount = Math.max(0, Number(leaveRequest.requiredTokens ?? leaveRequest.tokenCost ?? 0));
+  if (!amount) return getTokenBalance(cadet, leaveRequest.fromDate || new Date());
+  const { year, month } = currentTokenMonth(leaveRequest.fromDate || new Date());
+  await createTokenLedgerEntry({
+    cadet,
+    leaveRequestId: leaveRequest.requestId,
+    passId: leaveRequest.passId || null,
+    amount,
+    transactionType: 'TOKEN_CONSUMED',
+    year,
+    month,
+    reason: `${leaveRequest.leaveType} approved`,
+    actor,
+    idempotencyKey: `consume:${cadet.roll}:${leaveRequest.requestId}`,
+    metadata: { leaveType: leaveRequest.leaveType }
+  });
+  await AuditLog.create({
+    action: 'TOKEN_CONSUMED',
+    roll: cadet.roll,
+    details: { leaveRequestId: leaveRequest.requestId, tokens: amount, actor, leaveType: leaveRequest.leaveType }
+  });
+  return getTokenBalance(cadet, leaveRequest.fromDate || new Date());
+}
+
+async function releaseReservedLeaveTokens(cadet, leaveRequest, actor = 'system', reason = 'Reservation released') {
+  const amount = Math.max(0, Number(leaveRequest.requiredTokens ?? leaveRequest.tokenCost ?? 0));
+  if (!amount) return getTokenBalance(cadet, leaveRequest.fromDate || new Date());
+  const { year, month } = currentTokenMonth(leaveRequest.fromDate || new Date());
+  await createTokenLedgerEntry({
+    cadet,
+    leaveRequestId: leaveRequest.requestId,
+    passId: leaveRequest.passId || null,
+    amount,
+    transactionType: 'TOKEN_RESERVATION_RELEASED',
+    year,
+    month,
+    reason,
+    actor,
+    idempotencyKey: `release:${cadet.roll}:${leaveRequest.requestId}`,
+    metadata: { leaveType: leaveRequest.leaveType }
+  });
+  await AuditLog.create({
+    action: 'TOKEN_RESERVATION_RELEASED',
+    roll: cadet.roll,
+    details: { leaveRequestId: leaveRequest.requestId, tokens: amount, actor, leaveType: leaveRequest.leaveType, reason }
+  });
+  return getTokenBalance(cadet, leaveRequest.fromDate || new Date());
+}
+
+async function expireUnusedMonthlyTokens(date = new Date(), actor = 'system') {
+  const target = new Date(date);
+  target.setDate(0);
+  const { year, month } = currentTokenMonth(target);
+  const allocations = await LeaveTokenAllocation.find({ year, month, expiredAt: { $exists: false } });
+  let expiredCount = 0;
+  for (const allocation of allocations) {
+    const cadet = await Cadet.findOne({ roll: allocation.roll });
+    if (!cadet) continue;
+    const balance = await getTokenBalance(cadet, new Date(year, month - 1, 1));
+    const unused = Math.max(0, balance.available);
+    if (!unused) {
+      allocation.expired = 0;
+      allocation.expiredAt = new Date();
+      await allocation.save();
+      continue;
+    }
+    await createTokenLedgerEntry({
+      cadet,
+      amount: unused,
+      transactionType: 'TOKEN_EXPIRED',
+      year,
+      month,
+      reason: 'Unused monthly tokens expired',
+      actor,
+      idempotencyKey: `expire:${allocation.cadetId}:${year}:${month}`,
+      metadata: { noCarryOver: true }
+    });
+    allocation.expired = unused;
+    allocation.expiredAt = new Date();
+    await allocation.save();
+    await AuditLog.create({ action: 'TOKEN_EXPIRED', roll: cadet.roll, details: { tokens: unused, year, month, actor } });
+    expiredCount += 1;
+  }
+  return { year, month, expiredCount };
+}
+
+async function ensureCurrentMonthAllocationsForAllCadets(actor = 'startup') {
+  const cadets = await Cadet.find({ enrollmentStatus: { $ne: 'GRADUATED' } }).select('roll name leaveTokens');
+  let allocatedCount = 0;
+  for (const cadet of cadets) {
+    await ensureMonthlyTokenAllocation(cadet, new Date(), actor);
+    const balance = await getTokenBalance(cadet);
+    cadet.leaveTokens = balance.available;
+    await cadet.save();
+    allocatedCount += 1;
+  }
+  await AuditLog.create({
+    action: 'MONTHLY_TOKEN_ALLOCATED',
+    details: {
+      allocatedCount,
+      actor,
+      monthlyAllowance: MONTHLY_LEAVE_TOKEN_ALLOWANCE,
+      carryOver: 'DISABLED',
+      idempotent: true
+    }
+  });
+  return { allocatedCount };
+}
+
+function publicTokenBalance(balance) {
+  return {
+    month: balance.month,
+    year: balance.year,
+    monthLabel: balance.monthLabel,
+    monthlyAllocation: balance.monthlyAllocation,
+    allocation: balance.allocation,
+    used: balance.used,
+    consumed: balance.consumed,
+    reserved: balance.reserved,
+    available: balance.available,
+    expired: balance.expired,
+    transactions: balance.transactions || []
+  };
 }
 
 function hasActiveLeaveRequest(cadet) {
@@ -4249,6 +4613,7 @@ app.get('/api/cadet/dashboard', authenticateJWT, asyncHandler(async (req, res) =
   const emergencyVerificationCode = pendingLeave?.approvalStatus === 'approved'
     ? (pendingLeave.emergencyVerificationCode || pendingLeave.passVerificationToken || null)
     : null;
+  const tokenBalance = await getTokenBalance(cadet);
 
   res.json({
     cadet: {
@@ -4285,8 +4650,9 @@ app.get('/api/cadet/dashboard', authenticateJWT, asyncHandler(async (req, res) =
       nextLevelTitle: nextLevel.title,
       nextCrateXp,
       xpToNextCrate: Math.max(0, nextCrateXp - Number(cadet.xp || 0)),
-      leaveTokens: cadet.leaveTokens ?? 4,
-      maxLeaveTokens: 8,
+      leaveTokens: tokenBalance.available,
+      maxLeaveTokens: tokenBalance.monthlyAllocation || MONTHLY_LEAVE_TOKEN_ALLOWANCE,
+      leaveTokenBalance: publicTokenBalance(tokenBalance),
       currentStreak: cadet.currentStreak || 0,
       longestStreak: cadet.longestStreak || 0,
       cratesAvailable: cadet.cratesAvailable || 0,
@@ -4328,6 +4694,38 @@ app.get('/api/cadet/dashboard', authenticateJWT, asyncHandler(async (req, res) =
     shoreLeaveStats: buildShoreLeaveStats(shoreLeaveHistory),
     overdueAlert,
     leaveBlock
+  });
+}));
+
+app.get('/api/cadet/leave-tokens', authenticateJWT, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'cadet') return res.status(403).json({ error: 'Unauthorized' });
+  const cadet = await Cadet.findOne({ roll: req.user.roll });
+  if (!cadet || cadet.activeSessionId !== req.user.sessionId) {
+    return res.status(401).json({ error: 'Session invalid or logged in from another device.' });
+  }
+  const balance = await getTokenBalance(cadet);
+  res.json({ success: true, policy: LEAVE_TOKEN_POLICY, balance: publicTokenBalance(balance) });
+}));
+
+app.post('/api/cadet/leave-token-quote', authenticateJWT, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'cadet') return res.status(403).json({ error: 'Unauthorized' });
+  const cadet = await Cadet.findOne({ roll: req.user.roll });
+  if (!cadet || cadet.activeSessionId !== req.user.sessionId) {
+    return res.status(401).json({ error: 'Session invalid or logged in from another device.' });
+  }
+  const { leaveType, fromDate, toDate, fromTime, toTime } = req.body || {};
+  const from = combineDateAndTime(fromDate, fromTime) || parseDateValue(fromDate);
+  const to = combineDateAndTime(toDate, toTime) || parseDateValue(toDate) || from;
+  const calculation = calculateRequiredTokens({ leaveType, fromDate: from, toDate: to });
+  const balance = await getTokenBalance(cadet, from || new Date());
+  if (!calculation.valid) {
+    return res.status(400).json({ success: false, error: calculation.message, calculation, balance: publicTokenBalance(balance) });
+  }
+  res.json({
+    success: true,
+    calculation,
+    balance: publicTokenBalance(balance),
+    remainingAfterApproval: Math.max(0, balance.available - calculation.requiredTokens)
   });
 }));
 
@@ -4492,9 +4890,10 @@ app.post('/api/admin/grant-tokens', requireOfficer, asyncHandler(async (req, res
   const grantedThisMonth = await AuditLog.aggregate([
     {
       $match: {
-        action: 'LEAVE_TOKENS_GRANTED',
+        action: 'TOKEN_REFUNDED',
         roll: cadet.roll,
-        timestamp: { $gte: monthStart }
+        timestamp: { $gte: monthStart },
+        'details.grantedBy': { $exists: true }
       }
     },
     { $group: { _id: '$roll', total: { $sum: '$details.tokens' } } }
@@ -4504,20 +4903,34 @@ app.post('/api/admin/grant-tokens', requireOfficer, asyncHandler(async (req, res
     return res.status(400).json({ error: `HOD can grant max 4 bonus tokens per cadet/month. Already granted: ${alreadyGranted}.` });
   }
 
-  cadet.leaveTokens = Math.min(8, Number(cadet.leaveTokens ?? 4) + amount);
+  await ensureMonthlyTokenAllocation(cadet, new Date(), req.officer.username);
+  const { year, month } = currentTokenMonth(new Date());
+  await createTokenLedgerEntry({
+    cadet,
+    amount,
+    transactionType: 'TOKEN_REFUNDED',
+    year,
+    month,
+    reason: reason || 'Administrative token adjustment',
+    actor: req.officer.username,
+    idempotencyKey: `admin-grant:${cadet.roll}:${year}:${month}:${crypto.randomUUID()}`,
+    metadata: { administrativeAdjustment: true }
+  });
+  const tokenBalance = await getTokenBalance(cadet);
+  cadet.leaveTokens = tokenBalance.available;
   await cadet.save();
   await AuditLog.create({
-    action: 'LEAVE_TOKENS_GRANTED',
+    action: 'TOKEN_REFUNDED',
     roll: cadet.roll,
     details: { tokens: amount, reason: reason || '', grantedBy: req.officer.username }
   });
   await sendPushToCadet(cadet.roll, {
-    title: 'Bonus leave tokens granted',
-    body: `You now have ${cadet.leaveTokens} tokens.`,
+    title: 'Leave tokens updated',
+    body: `You now have ${tokenBalance.available} tokens available.`,
     url: '/cadet-dashboard.html'
   }).catch(() => {});
-  emitCadetEvent(cadet, 'token:granted', { tokens: amount, leaveTokens: cadet.leaveTokens, reason: reason || '' });
-  res.json({ success: true, roll: cadet.roll, leaveTokens: cadet.leaveTokens });
+  emitCadetEvent(cadet, 'token:updated', { tokens: amount, leaveTokens: cadet.leaveTokens, tokenBalance: publicTokenBalance(tokenBalance), reason: reason || '' });
+  res.json({ success: true, roll: cadet.roll, leaveTokens: cadet.leaveTokens, tokenBalance: publicTokenBalance(tokenBalance) });
 }));
 
 app.get('/api/admin/prizes/pending', requireOfficer, asyncHandler(async (req, res) => {
@@ -4578,100 +4991,65 @@ app.post('/api/cadet/shore-leave-request', authenticateJWT, asyncHandler(async (
       error: 'You already have an active shore leave. Please return/check in before applying again.'
     });
   }
-  const shoreLeaveCost = leaveTokenCost('Shore Leave');
-  if (Number(cadet.leaveTokens ?? 4) < shoreLeaveCost) {
-    return res.status(400).json({
-      error: `Not enough leave tokens. You have ${cadet.leaveTokens ?? 4} tokens. This leave costs ${shoreLeaveCost} token.`
-    });
-  }
-
   const now = new Date();
   const expiresAt = getTodayAt(18, 0);
-
   const { destination, reason } = req.body || {};
+  if (now.getDay() !== 0) {
+    return res.status(400).json({ error: 'Sunday Shore Leave is available only on Sundays.' });
+  }
   if (!String(destination || '').trim()) return res.status(400).json({ error: 'Destination is required.' });
   if (!String(reason || '').trim()) return res.status(400).json({ error: 'Purpose/Reason is required.' });
 
-  const passId = await generateUniquePassId();
+  const calculation = calculateRequiredTokens({ leaveType: 'Sunday Shore Leave', fromDate: now, toDate: expiresAt });
+  if (!calculation.valid) return res.status(400).json({ error: calculation.message });
   const requestId = crypto.randomUUID();
-  const emergencyVerificationCode = await generateUniqueEmergencyVerificationCode(passId);
-
-  const record = new LeaveRecord({
-    roll: cadet.roll,
-    name: cadet.name,
-    email: cadet.email,
-    batch: cadet.batch,
-    course: cadet.course,
-    studentId: cadet.studentId,
-    dest: String(destination).trim(),
-    checkOutTime: nowTime24(),
-    checkInTime: '18:00',
-    checkOutDate: now,
+  cadet.pendingLeave = {
+    requestId,
+    leaveType: 'Sunday Shore Leave',
     fromDate: now,
     toDate: expiresAt,
     fromTime: nowTime24(),
     toTime: '18:00',
-    status: 'approved',
-    leaveType: 'Shore Leave',
-    leaveReason: String(reason).trim(),
-    approvalStatus: 'approved',
-    approvedBy: 'AUTO_APPROVED',
-    approvedAt: now,
-    passId,
-    passVerificationToken: emergencyVerificationCode,
-    emergencyVerificationCode,
-    emergencyCodeGeneratedAt: now,
-    emergencyCodeExpiresAt: expiresAt,
-    emergencyGateOutUsed: false,
-    emergencyGateInUsed: false,
-    expired: false,
-    gatePassMessage: 'Safe Journey',
-    passIssuedAt: now
-  });
-
-  const { emailResult, gatePassUrl } = await sendShoreLeaveApprovedEmail(req, cadet, record);
-  cadet.leaveTokens = Math.max(0, Number(cadet.leaveTokens ?? 4) - shoreLeaveCost);
+    returnDate: expiresAt,
+    dest: String(destination).trim(),
+    reason: String(reason).trim(),
+    documentUrl: null,
+    supportingDocument: null,
+    approvalStatus: 'pending_approval',
+    requestedAt: now,
+    reviewedAt: null,
+    reviewedBy: null,
+    rejectionReason: null,
+    passId: null,
+    passVerificationToken: null,
+    tokenCost: calculation.requiredTokens,
+    requiredTokens: calculation.requiredTokens,
+    tokenPolicy: calculation
+  };
+  const balance = await reserveLeaveTokens(cadet, cadet.pendingLeave, calculation.requiredTokens, 'cadet');
+  cadet.leaveTokens = balance.available;
+  cadet.markModified('pendingLeave');
   await cadet.save();
-  await xpService.awardXP(cadet._id, 'FIRST_SHORE_LEAVE', 'First shore leave').catch(() => {});
-  if (now.getHours() >= 16) await badgeService.awardBadge(cadet._id, 'night_owl').catch(() => {});
-  await maybeAwardLeaveBadges(cadet).catch(() => {});
-  emitCadetEvent(cadet, 'leave:approved', { passId, gatePassUrl, emergencyVerificationCode, leaveTokens: cadet.leaveTokens });
-  await sendPushToCadet(cadet.roll, {
-    title: 'Shore Leave approved',
-    body: 'Remember to return by 18:00 HRS.',
-    url: '/cadet-dashboard.html'
-  });
-  await AuditLog.insertMany([
-    {
-      action: 'SHORE_LEAVE_AUTO_APPROVED',
-      roll: cadet.roll,
-      details: { passId, destination: record.dest, emailDeliveryMode: emailResult.deliveryMode || 'unknown' }
-    },
-    {
-      action: 'EMERGENCY_CODE_GENERATED',
-      roll: cadet.roll,
-      details: { passId, requestId, emergencyVerificationCode, expiresAt }
-    },
-    {
-      action: 'GATE_PASS_GENERATED',
-      roll: cadet.roll,
-      details: { passId, gatePassPdfUrl: record.gatePassPdfUrl || null }
-    },
-    {
-      action: 'GATE_PASS_EMAILED',
-      roll: cadet.roll,
-      details: { passId, emailDeliveryMode: emailResult.deliveryMode || 'unknown' }
+  await AuditLog.create({
+    action: 'LEAVE_REQUESTED',
+    roll: cadet.roll,
+    details: {
+      leaveType: 'Sunday Shore Leave',
+      requestId,
+      requiredTokens: calculation.requiredTokens,
+      tokenBalance: publicTokenBalance(balance)
     }
-  ]);
-
-  res.status(201).json({
+  });
+  const emailResult = await sendLeaveSubmittedEmail(req, cadet, cadet.pendingLeave);
+  emitCadetEvent(cadet, 'leave:requested', { requestId, tokenBalance: publicTokenBalance(balance) });
+  return res.status(201).json({
     success: true,
-    message: 'Shore Leave Approved!',
-    email: cadet.email,
-    passId,
-    emergencyVerificationCode,
-    gatePassUrl,
-    record
+    status: 'pending_approval',
+    requestId,
+    requiredTokens: calculation.requiredTokens,
+    tokenBalance: publicTokenBalance(balance),
+    details: cadet.pendingLeave,
+    emailResult: publicEmailDeliveryResult(emailResult)
   });
 }));
 
@@ -4691,12 +5069,9 @@ app.post('/api/cadet/leave-request', authenticateJWT, asyncHandler(async (req, r
   if (await findOpenShoreLeaveRecord(cadet.roll)) {
     return res.status(400).json({ error: 'You already have an active shore leave. Please return/check in before applying again.' });
   }
-  if (!isLeaveTypeValid(leaveType)) return res.status(400).json({ error: 'Leave type must be Medical, Special Leave, or Others.' });
-  const tokenCost = leaveTokenCost(leaveType);
-  if (Number(cadet.leaveTokens ?? 4) < tokenCost) {
-    return res.status(400).json({
-      error: `Not enough leave tokens. You have ${cadet.leaveTokens ?? 4} tokens. This leave costs ${tokenCost} token${tokenCost === 1 ? '' : 's'}.`
-    });
+  const normalizedLeaveType = normalizeLeaveType(leaveType);
+  if (!normalizedLeaveType) {
+    return res.status(400).json({ error: `Leave type must be one of: ${FINAL_LEAVE_TYPES.join(', ')}.` });
   }
 
   const parsedFromDate = parseDateValue(fromDate);
@@ -4713,9 +5088,6 @@ app.post('/api/cadet/leave-request', authenticateJWT, asyncHandler(async (req, r
   if (endOfDay(parsedToDate) < startOfDay(parsedFromDate)) {
     return res.status(400).json({ error: 'To date cannot be earlier than From date.' });
   }
-  if (leaveType === 'Others' && !parsedReturnDate) {
-    return res.status(400).json({ error: 'Date of Return to College is required for Others leave.' });
-  }
   if (parsedReturnDate && endOfDay(parsedReturnDate) < startOfDay(parsedToDate)) {
     return res.status(400).json({ error: 'Date of Return to College cannot be earlier than the leave end date.' });
   }
@@ -4723,23 +5095,33 @@ app.post('/api/cadet/leave-request', authenticateJWT, asyncHandler(async (req, r
     return res.status(400).json({ error: 'Leave reason is required.' });
   }
 
-  const documentRequired = ['Medical', 'Special Leave'].includes(leaveType);
+  const authoritativeFromDate = combineDateAndTime(fromDate, fromTime) || startOfDay(parsedFromDate);
+  const authoritativeToDate = combineDateAndTime(toDate, toTime) || endOfDay(parsedToDate);
+  const tokenCalculation = calculateRequiredTokens({
+    leaveType: normalizedLeaveType,
+    fromDate: authoritativeFromDate,
+    toDate: authoritativeToDate
+  });
+  if (!tokenCalculation.valid) return res.status(400).json({ error: tokenCalculation.message });
+
+  const documentRequired = normalizedLeaveType === 'Medical Leave';
   if (documentRequired && !document) {
-    return res.status(400).json({ error: `${leaveType} requires a supporting document.` });
+    return res.status(400).json({ error: `${normalizedLeaveType} requires a supporting document.` });
   }
 
   let documentUrl = null;
   let supportingDocument = null;
   if (document) {
-    supportingDocument = await uploadLeaveSupportingDocument({ document, cadet, leaveType });
+    supportingDocument = await uploadLeaveSupportingDocument({ document, cadet, leaveType: normalizedLeaveType });
     documentUrl = supportingDocument?.publicUrl || supportingDocument?.url || null;
   }
 
+  const requestId = crypto.randomUUID();
   cadet.pendingLeave = {
-    requestId: crypto.randomUUID(),
-    leaveType,
-    fromDate: combineDateAndTime(fromDate, fromTime) || startOfDay(parsedFromDate),
-    toDate: combineDateAndTime(toDate, toTime) || endOfDay(parsedToDate),
+    requestId,
+    leaveType: normalizedLeaveType,
+    fromDate: authoritativeFromDate,
+    toDate: authoritativeToDate,
     fromTime,
     toTime,
     returnDate: parsedReturnDate ? endOfDay(parsedReturnDate) : null,
@@ -4754,20 +5136,27 @@ app.post('/api/cadet/leave-request', authenticateJWT, asyncHandler(async (req, r
     rejectionReason: null,
     passId: null,
     passVerificationToken: null,
-    tokenCost
+    tokenCost: tokenCalculation.requiredTokens,
+    requiredTokens: tokenCalculation.requiredTokens,
+    tokenPolicy: tokenCalculation
   };
   
+  const balance = await reserveLeaveTokens(cadet, cadet.pendingLeave, tokenCalculation.requiredTokens, 'cadet');
+  cadet.leaveTokens = balance.available;
   await cadet.save();
   await AuditLog.create({
     action: 'LEAVE_REQUESTED',
     roll: cadet.roll,
     details: {
-      leaveType,
+      leaveType: normalizedLeaveType,
+      requestId,
+      requiredTokens: tokenCalculation.requiredTokens,
       fromDate: cadet.pendingLeave.fromDate,
       toDate: cadet.pendingLeave.toDate,
       fromTime: cadet.pendingLeave.fromTime,
       toTime: cadet.pendingLeave.toTime,
-      returnDate: cadet.pendingLeave.returnDate
+      returnDate: cadet.pendingLeave.returnDate,
+      tokenBalance: publicTokenBalance(balance)
     }
   });
   if (new Date().getHours() >= 16) await badgeService.awardBadge(cadet._id, 'night_owl').catch(() => {});
@@ -4776,6 +5165,8 @@ app.post('/api/cadet/leave-request', authenticateJWT, asyncHandler(async (req, r
     success: true,
     status: 'pending_approval',
     requestId: cadet.pendingLeave.requestId,
+    requiredTokens: tokenCalculation.requiredTokens,
+    tokenBalance: publicTokenBalance(balance),
     submittedAt: cadet.pendingLeave.requestedAt,
     details: cadet.pendingLeave,
     emailResult: publicEmailDeliveryResult(emailResult)
@@ -5252,12 +5643,10 @@ app.get('/api/gate-pass/:passId', asyncHandler(async (req, res) => {
 app.post('/api/leave/generate-pass', authenticateJWT, requireOfficer, asyncHandler(async (req, res) => {
   const { cadetId, leaveType, dateOut, timeOut, dateIn, timeIn, purpose, dateOfReturn } = req.body || {};
   if (!cadetId) return res.status(400).json({ error: 'cadetId is required.' });
-  if (!isLeaveTypeValid(leaveType)) return res.status(400).json({ error: 'leaveType must be Medical, Special Leave, or Others.' });
+  const normalizedLeaveType = normalizeLeaveType(leaveType);
+  if (!normalizedLeaveType) return res.status(400).json({ error: `leaveType must be one of: ${FINAL_LEAVE_TYPES.join(', ')}.` });
   if (!dateOut || !dateIn || !timeOut || !timeIn || !purpose) {
     return res.status(400).json({ error: 'dateOut, timeOut, dateIn, timeIn, and purpose are required.' });
-  }
-  if (leaveType === 'Others' && !dateOfReturn) {
-    return res.status(400).json({ error: 'Date of Return is required for Others leave.' });
   }
 
   const fromDate = parseDateValue(dateOut);
@@ -5278,10 +5667,34 @@ app.post('/api/leave/generate-pass', authenticateJWT, requireOfficer, asyncHandl
   });
   if (!cadet) return res.status(404).json({ error: 'Cadet not found.' });
   if (isLeaveBlockActive(cadet)) return sendLeaveBlockedResponse(res, cadet);
+  const tokenCalculation = calculateRequiredTokens({
+    leaveType: normalizedLeaveType,
+    fromDate: combineDateAndTime(dateOut, timeOut) || startOfDay(fromDate),
+    toDate: combineDateAndTime(dateIn, timeIn) || endOfDay(toDate)
+  });
+  if (!tokenCalculation.valid) return res.status(400).json({ error: tokenCalculation.message });
+  await ensureMonthlyTokenAllocation(cadet, fromDate, req.officer.username);
+  const tokenBalanceBefore = await getTokenBalance(cadet, fromDate);
+  if (tokenBalanceBefore.available < tokenCalculation.requiredTokens) {
+    await AuditLog.create({
+      action: 'INSUFFICIENT_TOKEN_ATTEMPT',
+      roll: cadet.roll,
+      details: {
+        requiredTokens: tokenCalculation.requiredTokens,
+        availableTokens: tokenBalanceBefore.available,
+        leaveType: normalizedLeaveType,
+        actor: req.officer.username
+      }
+    });
+    return res.status(400).json({
+      error: `Insufficient Leave Tokens. Cadet has ${tokenBalanceBefore.available} tokens available, but this leave requires ${tokenCalculation.requiredTokens} tokens.`
+    });
+  }
 
   const passId = await generateUniquePassId();
   const issuedAt = new Date();
   const emergencyVerificationCode = await generateUniqueEmergencyVerificationCode(passId);
+  const manualRequestId = crypto.randomUUID();
 
   const record = await LeaveRecord.create({
     roll: cadet.roll,
@@ -5301,7 +5714,7 @@ app.post('/api/leave/generate-pass', authenticateJWT, requireOfficer, asyncHandl
     toTime: timeIn,
     returnDate: returnDate ? endOfDay(returnDate) : null,
     status: 'pass_generated',
-    leaveType,
+    leaveType: normalizedLeaveType,
     leaveReason: purpose,
     approvalStatus: 'approved',
     approvedBy: req.officer.username,
@@ -5317,6 +5730,25 @@ app.post('/api/leave/generate-pass', authenticateJWT, requireOfficer, asyncHandl
     gatePassMessage: 'Safe Journey',
     passIssuedAt: issuedAt
   });
+  if (tokenCalculation.requiredTokens > 0) {
+    await createTokenLedgerEntry({
+      cadet,
+      leaveRequestId: manualRequestId,
+      passId,
+      amount: tokenCalculation.requiredTokens,
+      transactionType: 'TOKEN_CONSUMED',
+      year: currentTokenMonth(fromDate).year,
+      month: currentTokenMonth(fromDate).month,
+      reason: `${normalizedLeaveType} manually issued by admin`,
+      actor: req.officer.username,
+      idempotencyKey: `manual-consume:${cadet.roll}:${passId}`,
+      metadata: { leaveType: normalizedLeaveType, manualPass: true }
+    });
+    const tokenBalance = await getTokenBalance(cadet, fromDate);
+    cadet.leaveTokens = tokenBalance.available;
+    await cadet.save();
+    emitCadetEvent(cadet, 'token:updated', { tokenBalance: publicTokenBalance(tokenBalance), passId });
+  }
 
   const gatePassDelivery = await sendGatePassEmail(req, cadet, {
     passId,
@@ -6037,7 +6469,7 @@ app.post('/api/chatbot', asyncHandler(async (req, res) => {
       if (safeMessage.toLowerCase().includes('enroll') || safeMessage.toLowerCase().includes('register') || safeMessage.toLowerCase().includes('not in')) {
         botReply = "If your Roll Number is not found in the official Master Database, please write a mail to the Administrator regarding the enquiry to get registered.";
       } else if (safeMessage.toLowerCase().includes('leave')) {
-        botReply = "Normal Shore Leave is auto-approved upon entry. Special/Medical Leave requires Administrator or HOD approval. You must be registered first.";
+        botReply = "AMET supports Home Leave, Medical Leave, Emergency Leave, Personal Leave, and Sunday Shore Leave. Every request follows the normal authorization workflow; token costs are calculated by the backend.";
       }
     }
 
@@ -6079,9 +6511,11 @@ const DASHBOARD_RECORD_FIELDS = [
 
 function normalizeDashboardLeaveType(type) {
   const value = String(type || '').trim().toLowerCase();
-  if (value === 'medical' || value === 'medical leave') return 'Medical';
-  if (value === 'special' || value === 'special leave') return 'Special Leave';
-  if (value === 'shore' || value === 'shore leave') return 'Shore Leave';
+  if (value === 'medical' || value === 'medical leave') return 'Medical Leave';
+  if (value === 'emergency' || value === 'emergency leave') return 'Emergency Leave';
+  if (value === 'personal' || value === 'personal leave') return 'Personal Leave';
+  if (value === 'home' || value === 'home leave') return 'Home Leave';
+  if (value === 'shore' || value === 'shore leave' || value === 'sunday shore leave') return 'Sunday Shore Leave';
   return type || 'Leave';
 }
 
@@ -6213,9 +6647,13 @@ async function buildDashboardSnapshot() {
   const rejectedByType = type => allRows.filter(row => row.leaveType === type && (row.approvalStatus === 'rejected' || row.status === 'rejected')).length;
   const expiredByType = type => allRows.filter(row => row.leaveType === type && (row.status === 'overdue' || row.status === 'expired')).length;
   const stats = {
-    totalShoreLeave: byType('Shore Leave'),
-    totalMedicalLeave: byType('Medical'),
-    totalSpecialLeave: byType('Special Leave'),
+    totalHomeLeave: byType('Home Leave'),
+    totalMedicalLeave: byType('Medical Leave'),
+    totalEmergencyLeave: byType('Emergency Leave'),
+    totalPersonalLeave: byType('Personal Leave'),
+    totalSundayShoreLeave: byType('Sunday Shore Leave'),
+    totalShoreLeave: byType('Sunday Shore Leave'),
+    totalSpecialLeave: byType('Emergency Leave') + byType('Personal Leave'),
     totalOverdue: activeRows.filter(row => row.status === 'overdue' || (row.toDate && !row.checkInDate && now > new Date(row.toDate))).length,
     totalPendingHodApproval: pendingHodCount,
     totalCheckedInToday: todayCheckins.length,
@@ -6236,28 +6674,28 @@ async function buildDashboardSnapshot() {
     liveStatus,
     recentCheckins,
     chart: {
-      labels: ['Shore', 'Medical', 'Special', 'Overdue', 'Checked In'],
-      active: [stats.totalShoreLeave, stats.totalMedicalLeave, stats.totalSpecialLeave, stats.totalOverdue, stats.totalCheckedInToday],
+      labels: ['Home', 'Medical', 'Emergency', 'Personal', 'Sunday'],
+      active: [stats.totalHomeLeave, stats.totalMedicalLeave, stats.totalEmergencyLeave, stats.totalPersonalLeave, stats.totalSundayShoreLeave],
       pending: [
-        pendingByType('Shore Leave'),
-        pendingByType('Medical'),
-        pendingByType('Special Leave'),
-        0,
-        0
+        pendingByType('Home Leave'),
+        pendingByType('Medical Leave'),
+        pendingByType('Emergency Leave'),
+        pendingByType('Personal Leave'),
+        pendingByType('Sunday Shore Leave')
       ],
       rejected: [
-        rejectedByType('Shore Leave'),
-        rejectedByType('Medical'),
-        rejectedByType('Special Leave'),
-        0,
-        0
+        rejectedByType('Home Leave'),
+        rejectedByType('Medical Leave'),
+        rejectedByType('Emergency Leave'),
+        rejectedByType('Personal Leave'),
+        rejectedByType('Sunday Shore Leave')
       ],
       expired: [
-        0,
-        0,
-        0,
-        expiredByType('Shore Leave') + expiredByType('Medical') + expiredByType('Special Leave'),
-        0
+        expiredByType('Home Leave'),
+        expiredByType('Medical Leave'),
+        expiredByType('Emergency Leave'),
+        expiredByType('Personal Leave'),
+        expiredByType('Sunday Shore Leave')
       ]
     }
   };
@@ -7177,6 +7615,8 @@ app.put('/api/admin/leave-requests/:roll/approve', requireOfficer, asyncHandler(
     cadet.pendingLeave.reviewedAt = new Date();
     cadet.pendingLeave.reviewedBy = req.officer.username;
     cadet.markModified('pendingLeave');
+    const tokenBalance = await releaseReservedLeaveTokens(cadet, cadet.pendingLeave, req.officer.username, 'Leave request rejected');
+    cadet.leaveTokens = tokenBalance.available;
     await cadet.save();
     const emailResult = await sendRejectionEmail(cadet, cadet.pendingLeave, reason.trim(), req.officer.username);
     await sendPushToCadet(cadet.roll, {
@@ -7184,7 +7624,7 @@ app.put('/api/admin/leave-requests/:roll/approve', requireOfficer, asyncHandler(
       body: `Reason: ${reason.trim()}`,
       url: '/cadet-dashboard.html'
     });
-    emitCadetEvent(cadet, 'leave:rejected', { reason: reason.trim() });
+    emitCadetEvent(cadet, 'leave:rejected', { reason: reason.trim(), tokenBalance: publicTokenBalance(tokenBalance) });
     await AuditLog.create({
       action: 'LEAVE_REJECTED',
       roll: cadet.roll,
@@ -7194,12 +7634,7 @@ app.put('/api/admin/leave-requests/:roll/approve', requireOfficer, asyncHandler(
   } else {
     const leaveWindow = resolveLeaveWindow(cadet.pendingLeave);
     if (isLeaveBlockActive(cadet)) return sendLeaveBlockedResponse(res, cadet);
-    const tokenCost = Number(cadet.pendingLeave.tokenCost ?? leaveTokenCost(cadet.pendingLeave.leaveType));
-    if (Number(cadet.leaveTokens ?? 4) < tokenCost) {
-      return res.status(400).json({
-        error: `Not enough leave tokens. Cadet has ${cadet.leaveTokens ?? 4} tokens. This leave costs ${tokenCost} token${tokenCost === 1 ? '' : 's'}.`
-      });
-    }
+    const tokenCost = Number(cadet.pendingLeave.requiredTokens ?? cadet.pendingLeave.tokenCost ?? leaveTokenCost(cadet.pendingLeave.leaveType, leaveWindow.fromDate, leaveWindow.toDate));
     cadet.pendingLeave.fromDate = leaveWindow.fromDate;
     cadet.pendingLeave.toDate = leaveWindow.toDate;
     cadet.pendingLeave.returnDate = leaveWindow.returnDate;
@@ -7220,23 +7655,27 @@ app.put('/api/admin/leave-requests/:roll/approve', requireOfficer, asyncHandler(
     cadet.pendingLeave.gatePass = null;
     cadet.pendingLeave.passIssuedAt = null;
     cadet.pendingLeave.tokenCost = tokenCost;
+    cadet.pendingLeave.requiredTokens = tokenCost;
     cadet.leaveStatus = 'APPROVED';
-    cadet.leaveTokens = Math.max(0, Number(cadet.leaveTokens ?? 4) - tokenCost);
     cadet.markModified('pendingLeave');
+    const tokenBalance = await consumeReservedLeaveTokens(cadet, cadet.pendingLeave, req.officer.username);
+    cadet.leaveTokens = tokenBalance.available;
     await cadet.save();
     await sendPushToCadet(cadet.roll, {
       title: 'Your leave is approved',
       body: 'Report to the gate for checkout verification. Your gate pass will be issued after checkout.',
       url: '/cadet-dashboard.html'
     });
-    emitCadetEvent(cadet, 'leave:approved', { gatePassStatus: 'pending_checkout', leaveTokens: cadet.leaveTokens });
+    emitCadetEvent(cadet, 'leave:approved', { gatePassStatus: 'pending_checkout', leaveTokens: cadet.leaveTokens, tokenBalance: publicTokenBalance(tokenBalance) });
     await AuditLog.create({
       action: 'LEAVE_APPROVED',
       roll: cadet.roll,
       details: {
         reviewedBy: req.officer.username,
         gatePassStatus: 'pending_checkout',
-        gatePassIssuePolicy: 'issued_at_checkout'
+        gatePassIssuePolicy: 'issued_at_checkout',
+        requiredTokens: tokenCost,
+        tokenBalance: publicTokenBalance(tokenBalance)
       }
     });
     return res.json({
@@ -7496,17 +7935,26 @@ function startDailyBackupJob() {
 function startMonthlyTokenResetJob() {
   cron.schedule('0 0 1 * *', async () => {
     try {
-      const result = await streakService.resetMonthlyTokens();
-      await AuditLog.create({ action: 'MONTHLY_TOKEN_RESET', details: { modifiedCount: result.modifiedCount || 0 } });
-      const cadets = await Cadet.find().select('roll leaveTokens').limit(500);
+      const expiration = await expireUnusedMonthlyTokens(new Date(), 'monthly_job');
+      const cadets = await Cadet.find().select('roll name leaveTokens').limit(500);
+      let allocatedCount = 0;
       for (const cadet of cadets) {
+        const allocation = await ensureMonthlyTokenAllocation(cadet, new Date(), 'monthly_job');
+        const balance = await getTokenBalance(cadet);
+        cadet.leaveTokens = balance.available;
+        await cadet.save();
+        allocatedCount += allocation ? 1 : 0;
         await sendPushToCadet(cadet.roll, {
-          title: 'Leave tokens reset',
-          body: `Your leave tokens have been reset. You now have ${cadet.leaveTokens ?? 4} tokens.`,
+          title: 'Leave tokens allocated',
+          body: `Your ${balance.monthLabel} leave tokens are ready. You have ${balance.available} tokens available.`,
           url: '/cadet-dashboard.html'
         }).catch(() => {});
-        emitCadetEvent(cadet, 'token:granted', { leaveTokens: cadet.leaveTokens ?? 4, monthlyReset: true });
+        emitCadetEvent(cadet, 'token:updated', { tokenBalance: publicTokenBalance(balance), monthlyAllocation: true });
       }
+      await AuditLog.create({
+        action: 'MONTHLY_TOKEN_ALLOCATED',
+        details: { allocatedCount, expiration, monthlyAllowance: MONTHLY_LEAVE_TOKEN_ALLOWANCE, carryOver: 'DISABLED' }
+      });
     } catch (error) {
       logError('[TOKENS] Monthly reset failed', error);
     }
@@ -7917,6 +8365,7 @@ async function startServer() {
   );
   await ensureFaceEmbeddingIndex();
   await ensureCoreIndexes();
+  await ensureCurrentMonthAllocationsForAllCadets('startup');
 
   // Seed default cadet if json exists
   try {
@@ -7935,6 +8384,7 @@ async function startServer() {
   } catch (e) {
     logInfo('[DB] No sample data found to seed');
   }
+  await ensureCurrentMonthAllocationsForAllCadets('startup_post_seed');
 
   const PORT = Number(process.env.PORT) || 3000;
   const ENABLE_OPTIONAL_STARTUP = process.env.ENABLE_OPTIONAL_STARTUP === 'true';
