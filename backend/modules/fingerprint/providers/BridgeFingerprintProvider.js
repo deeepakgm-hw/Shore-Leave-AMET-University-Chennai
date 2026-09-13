@@ -20,7 +20,9 @@ class BridgeFingerprintProvider extends FingerprintProvider {
       serialNumber: null,
       sdkVersion: null,
       checkedAt: null,
-      code: this.baseUrl ? 'DEVICE_OFFLINE' : 'BRIDGE_NOT_CONFIGURED'
+      code: this.baseUrl ? 'DEVICE_OFFLINE' : 'BRIDGE_NOT_CONFIGURED',
+      connectionState: this.baseUrl ? 'DISCONNECTED' : 'ERROR',
+      ready: false
     };
   }
 
@@ -84,20 +86,46 @@ class BridgeFingerprintProvider extends FingerprintProvider {
         serialNumber: payload.serialNumber || payload.serial || null,
         sdkVersion: payload.sdkVersion || payload.version || null,
         checkedAt: new Date().toISOString(),
-        code: connected ? 'ONLINE' : 'DEVICE_OFFLINE'
+        code: connected ? 'READY' : (payload.code || 'DEVICE_OFFLINE'),
+        connectionState: connected ? 'READY' : 'ERROR',
+        ready: connected,
+        adapterReachable: true,
+        rdServiceAvailable: connected,
+        deviceDetected: connected,
+        deviceIdentified: connected
       };
     } catch (error) {
       this.lastStatus = {
         ...this.lastStatus,
         connected: false,
         checkedAt: new Date().toISOString(),
-        code: error.code || 'DEVICE_OFFLINE'
+        code: error.code || 'DEVICE_OFFLINE',
+        connectionState: 'DISCONNECTED',
+        ready: false,
+        adapterReachable: false,
+        rdServiceAvailable: false,
+        deviceDetected: false,
+        deviceIdentified: false
       };
     }
     return this.lastStatus;
   }
 
   async capture() {
+    const readiness = await this.status();
+    if (!readiness.ready) {
+      throw new FingerprintError('Fingerprint scanner is not ready for capture.', {
+        code: readiness.code || 'DEVICE_NOT_READY',
+        statusCode: 503,
+        details: {
+          connectionState: readiness.connectionState || 'ERROR',
+          adapterReachable: readiness.adapterReachable === true,
+          rdServiceAvailable: readiness.rdServiceAvailable === true,
+          deviceDetected: readiness.deviceDetected === true,
+          deviceIdentified: readiness.deviceIdentified === true
+        }
+      });
+    }
     const payload = await this.request(this.endpoint('MANTRA_CAPTURE_ENDPOINT', '/capture'), {
       method: 'POST',
       body: JSON.stringify({
@@ -141,6 +169,17 @@ class BridgeFingerprintProvider extends FingerprintProvider {
       matched: payload.matched === true || payload.match === true,
       score: Number(payload.score) || 0,
       threshold: Number(payload.threshold) || Number(process.env.FINGERPRINT_MATCH_THRESHOLD) || null
+    };
+  }
+
+  async diagnostic() {
+    const status = await this.status();
+    return {
+      ...status,
+      safeDiagnostic: true,
+      captureEndpoint: this.endpoint('MANTRA_CAPTURE_ENDPOINT', '/capture'),
+      matchEndpoint: this.endpoint('MANTRA_MATCH_ENDPOINT', '/match'),
+      rawBiometricReturned: false
     };
   }
 }

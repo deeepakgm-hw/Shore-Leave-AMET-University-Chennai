@@ -7,6 +7,48 @@ const {
 } = require('./utils');
 
 function createFingerprintService({ Cadet, AuditLog, sdk, io, onVerified }) {
+  let captureInFlight = null;
+
+  async function captureOnce(context = {}) {
+    if (captureInFlight) {
+      throw new FingerprintError('A fingerprint capture is already in progress. Please wait for it to finish.', {
+        code: 'CAPTURE_IN_PROGRESS',
+        statusCode: 409
+      });
+    }
+    captureInFlight = sdk.capture()
+      .then((capture) => {
+        if (!capture?.template || typeof capture.template !== 'string') {
+          throw new FingerprintError('Fingerprint capture response was invalid.', {
+            code: 'INVALID_CAPTURE_RESPONSE',
+            statusCode: 422
+          });
+        }
+        return capture;
+      })
+      .catch((error) => {
+        if (error instanceof FingerprintError) throw error;
+        throw new FingerprintError(error.message || 'Fingerprint capture failed.', {
+          code: error.code || 'CAPTURE_FAILED',
+          statusCode: error.statusCode || 503,
+          details: error.details || null
+        });
+      })
+      .finally(() => {
+        captureInFlight = null;
+      });
+    await AuditLog.create({
+      action: 'FINGERPRINT_CAPTURE_REQUESTED',
+      roll: context.roll || null,
+      details: {
+        direction: context.direction || null,
+        terminal: context.terminal || null,
+        actor: context.actor || null
+      }
+    }).catch(() => {});
+    return captureInFlight;
+  }
+
   async function findCadet(value, session = null) {
     const lookup = cadetLookup(value);
     const query = Cadet.findOne(lookup.query);
@@ -56,7 +98,7 @@ function createFingerprintService({ Cadet, AuditLog, sdk, io, onVerified }) {
     }
 
     io?.emit('fingerprint:capture-progress', { cadetId: String(cadet._id), stage: 'CAPTURING' });
-    const capture = await sdk.capture();
+    const capture = await captureOnce({ roll: cadet.roll, actor, ipAddress, terminal: 'enrollment' });
     io?.emit('fingerprint:capture-progress', { cadetId: String(cadet._id), stage: 'GENERATING_TEMPLATE' });
     const encrypted = encryptTemplate(capture.template);
     const now = new Date();
@@ -206,7 +248,23 @@ function createFingerprintService({ Cadet, AuditLog, sdk, io, onVerified }) {
   }
 
   async function verify({ cadetId, actor, ipAddress, direction, terminal }) {
-    const liveCapture = await sdk.capture();
+    const status = await sdk.diagnostic();
+    if (!status.ready) {
+      throw new FingerprintError('Fingerprint Scanner Offline. Please check the Mantra MFS110 connection.', {
+        code: status.code || 'DEVICE_NOT_READY',
+        statusCode: 503,
+        details: {
+          connectionState: status.connectionState || 'ERROR',
+          provider: status.provider || null,
+          deviceModel: status.deviceModel || null,
+          deviceDetected: status.deviceDetected === true,
+          deviceIdentified: status.deviceIdentified === true,
+          rdServiceAvailable: status.rdServiceAvailable === true,
+          adapterReachable: status.adapterReachable === true
+        }
+      });
+    }
+    const liveCapture = await captureOnce({ actor, ipAddress, direction, terminal });
     let credentials;
     let requestedCadet = null;
     if (cadetId) {
@@ -458,7 +516,8 @@ function createFingerprintService({ Cadet, AuditLog, sdk, io, onVerified }) {
     verify,
     history,
     summary,
-    deviceStatus: () => sdk.status()
+    deviceStatus: () => sdk.status(),
+    deviceDiagnostic: () => sdk.diagnostic()
   };
 }
 

@@ -36,6 +36,7 @@ function createFingerprintRuntime({ requireOfficer, requireAdmin, Cadet, AuditLo
 
   const fingerprintRouter = attachSharedMiddleware(express.Router());
   fingerprintRouter.get('/device/status', statusLimit, asyncRoute(controller.deviceStatus));
+  fingerprintRouter.get('/device/diagnostic', statusLimit, asyncRoute(controller.deviceDiagnostic));
   fingerprintRouter.get('/summary', statusLimit, asyncRoute(controller.summary));
   fingerprintRouter.get('/history', statusLimit, asyncRoute(controller.history));
   fingerprintRouter.get('/status/:cadetId', statusLimit, asyncRoute(controller.status));
@@ -47,6 +48,7 @@ function createFingerprintRuntime({ requireOfficer, requireAdmin, Cadet, AuditLo
 
   const biometricRouter = attachSharedMiddleware(express.Router());
   biometricRouter.get('/device/status', statusLimit, asyncRoute(controller.deviceStatus));
+  biometricRouter.get('/device/diagnostic', statusLimit, asyncRoute(controller.deviceDiagnostic));
   biometricRouter.get('/summary', statusLimit, asyncRoute(controller.summary));
   biometricRouter.get('/history', statusLimit, asyncRoute(controller.history));
   biometricRouter.get('/fingerprint/device/status', statusLimit, asyncRoute(controller.deviceStatus));
