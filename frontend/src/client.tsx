@@ -1,23 +1,28 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
+import { StrictMode, startTransition } from "react";
+import { hydrateRoot, createRoot } from "react-dom/client";
+import { StartClient } from "@tanstack/react-start/client";
 import { RouterProvider } from "@tanstack/react-router";
 import { getRouter } from "./router";
 import "./styles.css";
 
-const router = getRouter();
-
-declare module "@tanstack/react-router" {
-  interface Register {
-    router: typeof router;
-  }
-}
-
 const rootElement = document.getElementById("root");
+
 if (rootElement) {
-  const root = ReactDOM.createRoot(rootElement);
-  root.render(
-    <React.StrictMode>
+  // Mobile / SPA environment (e.g. Capacitor where index.html provides <div id="root">)
+  const router = getRouter();
+  createRoot(rootElement).render(
+    <StrictMode>
       <RouterProvider router={router} />
-    </React.StrictMode>
+    </StrictMode>
   );
+} else {
+  // TanStack Start SSR web environment
+  startTransition(() => {
+    hydrateRoot(
+      document,
+      <StrictMode>
+        <StartClient />
+      </StrictMode>
+    );
+  });
 }

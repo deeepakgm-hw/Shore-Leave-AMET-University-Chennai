@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, redirect } from "@tanstack/react-router";
 import { motion, AnimatePresence } from "framer-motion";
 import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -11,15 +11,27 @@ import { useAuth } from "@/contexts/AuthContext";
 import { getErrorMessage } from "@/lib/errors";
 import { getCameraRuntimeIssue, logCameraRuntime, requestUserCamera } from "@/lib/camera-runtime";
 import type { Cadet, LeaveRequest, MutationResult, NotificationPage } from "@/types";
-import { redirect } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   Sparkles, LogOut, Calendar, KeyRound, ScanFace, Plus, Loader2,
-  Home, Trophy, User, Bell, Anchor, Camera, MapPinned,
+  Home, Trophy, User, Bell, Anchor, Camera, MapPin,
   ArrowRight, Check, X, Coins, Gift, Flame, Star, ChevronRight,
-  Crown, Medal, TrendingUp, Clock, Lock, Pencil,
+  Crown, Medal, TrendingUp, Clock, Lock, Pencil, QrCode, FileText,
   CheckCircle2, AlertCircle, PartyPopper, Package, ArrowUpRight,
+  ShieldCheck, Download, Mail, ExternalLink, RefreshCw
 } from "lucide-react";
+import {
+  ShoreCard,
+  ShoreButton,
+  ShoreStatCard,
+  ShoreStatusBadge,
+  ShoreFilterPill,
+  ShoreInput,
+  ShorePageHeader,
+  ShoreNotificationBell,
+  ShoreEmptyState,
+  ShoreModal,
+} from "@/components/shoreleave";
 import panel1 from "@/assets/amet-panel1.jpg.asset.json";
 import panel2 from "@/assets/amet-panel2.jpg.asset.json";
 import panel3 from "@/assets/amet-panel3.jpg.asset.json";
@@ -49,19 +61,9 @@ export const Route = createFileRoute("/_authenticated/cadet")({
   component: CadetDashboard,
 });
 
-/* ------------------------------- Klarna palette --------------------------
-   INK   #17061E   near-black aubergine text / primary button
-   CREAM #F5EFE6   page background
-   PAPER #FFFFFF   card surface
-   PINK  #F4C7C7   blob accent
-   MINT  #C9DAB8   blob accent
-   LILAC #D6C3F0   blob accent
-   BUTTR #F5D76E   accent tile
-   PEACH #F2A488   accent tile
-   ------------------------------------------------------------------------- */
-
-type TabKey = "home" | "leave" | "rewards" | "ranks" | "profile";
+export type TabKey = "home" | "leaves" | "apply" | "pass" | "profile" | "rewards" | "ranks";
 type OnboardStep = "welcome" | "permissions" | "otp" | "attention" | "done";
+
 type CadetDashboardResponse = {
   cadet: {
     name?: string;
@@ -71,6 +73,7 @@ type CadetDashboardResponse = {
     course?: string;
     department?: string;
     email?: string;
+    phone?: string;
     photoUrl?: string;
     leaveBlocked?: boolean;
     leaveBlockedReason?: string;
@@ -90,7 +93,7 @@ type CadetDashboardResponse = {
   };
 };
 
-type LeaveTokenBalance = {
+export type LeaveTokenBalance = {
   month?: number;
   year?: number;
   monthLabel?: string;
@@ -187,6 +190,7 @@ function normalizeCadetDashboardProfile(data: CadetDashboardResponse): Cadet {
     full_name: data.cadet.name || data.cadet.roll || "Cadet",
     name: data.cadet.name,
     email: data.cadet.email,
+    phone: data.cadet.phone,
     branch: data.cadet.course || data.cadet.batch,
     department: data.cadet.department || data.cadet.course || data.cadet.batch,
     photo_url: data.cadet.photoUrl || null,
@@ -224,6 +228,12 @@ function normalizeCadetDashboardRequests(data: CadetDashboardResponse): LeaveReq
     ...extractGatePassAssetFields(row),
   } as LeaveRequest));
   return [...active, ...history];
+}
+
+function getGreeting(name: string): string {
+  const hour = new Date().getHours();
+  const timeGreeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  return `${timeGreeting}, ${name}`;
 }
 
 function CadetDashboard() {
@@ -309,40 +319,45 @@ function CadetDashboard() {
   }
 
   if (userId && cadetLoading) {
-    return <div className="grid min-h-screen place-items-center bg-[#F5EFE6]"><Loader2 className="h-8 w-8 animate-spin text-[#17061E]" aria-label="Loading cadet profile" /></div>;
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#f0f7ff]">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-[#0077f6]" aria-label="Loading cadet profile" />
+          <p className="text-sm font-semibold text-slate-500">Loading ShoreLeave portal…</p>
+        </div>
+      </div>
+    );
   }
 
   const rollNo = cadet?.cadet_code ?? "NDA-0000";
   const department = cadet?.branch ?? "Executive";
   const leaveBlocked = !!cadet?.leave_blocked;
+
   const openLeave = () => {
     if (leaveBlocked) {
       toast.error("Your leave privileges are currently suspended.");
-      setTab("leave");
+      setTab("leaves");
       return;
     }
     setDrawerOpen(true);
   };
+
   const latestApprovedLeave = requests.find((request) => request.status === "approved");
+
   const openGatePass = () => {
     if (leaveBlocked) {
       toast.error("Your leave privileges are currently suspended.");
-      setTab("leave");
+      setTab("leaves");
       return;
     }
     if (!latestApprovedLeave) {
       toast.info("No approved gate pass is ready yet. Check your leave status first.");
-      setTab("leave");
+      setTab("leaves");
       return;
     }
-    const url = getGatePassDownloadUrl(latestApprovedLeave);
-    if (url) {
-      window.open(url, "_blank", "noopener,noreferrer");
-      return;
-    }
-    toast.info("Gate pass PDF is issued after gate check-out verification.");
-    setTab("leave");
+    setTab("pass");
   };
+
   const openFaceEnrollment = () => {
     if (cadet?.face_enrolled) {
       toast.success("Face enrollment is already active.");
@@ -352,9 +367,11 @@ function CadetDashboard() {
     toast.info("Face enrollment is completed by the Duty Officer or Admin enrollment console.");
     setTab("profile");
   };
+
   const editProfile = () => {
     toast.info("Profile changes are managed by administration. Please contact the duty officer.");
   };
+
   const deleteAccount = async () => {
     const confirmation = window.prompt(`This permanently deletes your account data. Enter ${rollNo} to confirm.`);
     if (confirmation === null) return;
@@ -372,10 +389,11 @@ function CadetDashboard() {
       toast.error(getErrorMessage(error, "Account deletion could not be completed."));
     }
   };
+
   const sendGatePassEmail = async (leave?: LeaveRequest) => {
     if (!leave) {
       toast.info("No approved gate pass is available to email yet.");
-      setTab("leave");
+      setTab("leaves");
       return;
     }
     if (gateEmailBusy) return;
@@ -392,6 +410,7 @@ function CadetDashboard() {
       setGateEmailBusy(false);
     }
   };
+
   const downloadGatePass = (leave?: LeaveRequest) => {
     const url = getGatePassDownloadUrl(leave);
     if (!url) {
@@ -402,61 +421,308 @@ function CadetDashboard() {
   };
 
   return (
-    <div className="relative min-h-screen bg-[#F5EFE6] text-[#17061E] antialiased">
-      <div className="mx-auto flex min-h-screen w-full max-w-md flex-col pb-28 sm:max-w-lg">
-        <KlarnaTopBar
-          name={profileName}
-          rollNo={rollNo}
-          unread={notificationPage?.unread ?? 0}
-          onBell={() => setNotifOpen(true)}
-          onSignOut={signOut}
-        />
+    <div className="relative min-h-screen text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900">
+      {/* Top Header / Navigation (Consistent with APK) */}
+      <CadetTopHeader
+        name={profileName}
+        rollNo={rollNo}
+        tab={tab}
+        setTab={setTab}
+        unread={notificationPage?.unread ?? 0}
+        onBell={() => setNotifOpen(true)}
+        onSignOut={signOut}
+      />
 
-        <main className="flex-1 px-5 pt-2">
-          {!cadet && (
-            <div className="mb-4 rounded-3xl border border-[#17061E]/10 bg-[#F5D76E]/40 p-4 text-[13px] leading-relaxed text-[#17061E]/80">
-              Your account isn't linked to a cadet record yet. Ask an administrator to assign your cadet profile.
-            </div>
-          )}
-          {cadet?.leave_blocked && <LeaveBlockedBanner cadet={cadet} />}
+      {/* Main Content Area */}
+      <main className="mx-auto w-full max-w-4xl px-4 pb-28 pt-4 sm:px-6 sm:pb-24 lg:max-w-5xl">
+        {!cadet && (
+          <div className="mb-6 rounded-3xl border border-amber-200 bg-amber-50/80 p-4 text-sm font-medium text-amber-800">
+            Your account isn't linked to a cadet record yet. Ask an administrator to assign your cadet profile.
+          </div>
+        )}
 
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={tab}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.25 }}
-            >
-              {tab === "home" && (requestsLoading ? <div className="py-16 text-center text-sm">Loading leave requests…</div> : <HomeTab name={profileName} requests={requests} onApply={() => setTab("leave")} onOpenLeave={openLeave} onOpenGatePass={openGatePass} onOpenFaceEnrollment={openFaceEnrollment} onViewActivity={() => setTab("leave")} onSendGatePassEmail={sendGatePassEmail} onDownloadGatePass={downloadGatePass} gateEmailBusy={gateEmailBusy} leaveBlocked={leaveBlocked} />)}
-              {tab === "leave" && <LeaveTab cadetId={cadet?.id} requests={requests} leaveBlocked={leaveBlocked} blockReason={cadet?.leave_blocked_reason ?? undefined} leaveTokens={cadet?.leave_tokens ?? 4} maxLeaveTokens={cadet?.max_leave_tokens ?? 28} tokenBalance={(cadet as Cadet & { leave_token_balance?: LeaveTokenBalance } | undefined)?.leave_token_balance} />}
-              {tab === "rewards" && <RewardsTab />}
-              {tab === "ranks" && <RanksTab name={profileName} />}
-              {tab === "profile" && <ProfileTab name={profileName} rollNo={rollNo} department={department} faceEnrolled={!!cadet?.face_enrolled} requests={requests} onFaceEnroll={openFaceEnrollment} onEditProfile={editProfile} onSignOut={signOut} onDeleteAccount={deleteAccount} />}
-            </motion.div>
-          </AnimatePresence>
-        </main>
+        {cadet?.leave_blocked && <LeaveBlockedBanner cadet={cadet} />}
 
-        <KlarnaTabBar tab={tab} setTab={setTab} />
-      </div>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={tab}
+            initial={false}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.2 }}
+          >
+            {tab === "home" && (
+              requestsLoading ? (
+                <div className="py-20 text-center text-sm text-slate-500 font-medium">Loading leave requests…</div>
+              ) : (
+                <HomeView
+                  name={profileName}
+                  requests={requests}
+                  cadet={cadet}
+                  onApply={() => setTab("apply")}
+                  onOpenLeave={openLeave}
+                  onOpenGatePass={openGatePass}
+                  onViewLeaves={() => setTab("leaves")}
+                  onSendGatePassEmail={sendGatePassEmail}
+                  onDownloadGatePass={downloadGatePass}
+                  gateEmailBusy={gateEmailBusy}
+                  leaveBlocked={leaveBlocked}
+                  onBell={() => setNotifOpen(true)}
+                  unread={notificationPage?.unread ?? 0}
+                />
+              )
+            )}
 
-      <ShoreLeaveDrawer open={drawerOpen} onOpenChange={setDrawerOpen} cadetId={cadet?.id} leaveBlocked={leaveBlocked} blockReason={cadet?.leave_blocked_reason ?? undefined} />
+            {tab === "leaves" && (
+              <LeavesView
+                cadetId={cadet?.id}
+                requests={requests}
+                leaveBlocked={leaveBlocked}
+                onApply={() => setTab("apply")}
+                onSendGatePassEmail={sendGatePassEmail}
+                onDownloadGatePass={downloadGatePass}
+                gateEmailBusy={gateEmailBusy}
+                onOpenPass={openGatePass}
+              />
+            )}
+
+            {tab === "apply" && (
+              <ApplyView
+                cadetId={cadet?.id}
+                leaveBlocked={leaveBlocked}
+                blockReason={cadet?.leave_blocked_reason ?? undefined}
+                onSuccess={() => setTab("leaves")}
+              />
+            )}
+
+            {tab === "pass" && (
+              <PassView
+                cadet={cadet}
+                leave={latestApprovedLeave}
+                onDownloadGatePass={downloadGatePass}
+                onSendGatePassEmail={sendGatePassEmail}
+                gateEmailBusy={gateEmailBusy}
+                onApply={() => setTab("apply")}
+              />
+            )}
+
+            {tab === "profile" && (
+              <ProfileView
+                name={profileName}
+                rollNo={rollNo}
+                department={department}
+                cadet={cadet}
+                requests={requests}
+                onFaceEnroll={openFaceEnrollment}
+                onEditProfile={editProfile}
+                onSignOut={signOut}
+                onDeleteAccount={deleteAccount}
+                onNavigateToRewards={() => setTab("rewards")}
+                onNavigateToRanks={() => setTab("ranks")}
+              />
+            )}
+
+            {tab === "rewards" && <RewardsView onBack={() => setTab("profile")} />}
+            {tab === "ranks" && <RanksView name={profileName} onBack={() => setTab("profile")} />}
+          </motion.div>
+        </AnimatePresence>
+      </main>
+
+      {/* Floating Bottom Navigation Bar (Mobile) */}
+      <CadetBottomNav tab={tab} setTab={setTab} onApplyAction={() => setTab("apply")} />
+
+      {/* Quick Action Drawer for shore leave if opened */}
+      <ShoreLeaveDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        cadetId={cadet?.id}
+        leaveBlocked={leaveBlocked}
+        blockReason={cadet?.leave_blocked_reason ?? undefined}
+      />
+
+      {/* Notifications modal */}
       <NotificationsSheet open={notifOpen} onOpenChange={setNotifOpen} />
     </div>
   );
 }
 
+/* =========================== TOP HEADER =========================== */
+function CadetTopHeader({
+  name,
+  rollNo,
+  tab,
+  setTab,
+  unread,
+  onBell,
+  onSignOut,
+}: {
+  name: string;
+  rollNo: string;
+  tab: TabKey;
+  setTab: (t: TabKey) => void;
+  unread: number;
+  onBell: () => void;
+  onSignOut: () => void;
+}) {
+  const initials = name.split(" ").map((s) => s[0]).join("").slice(0, 2).toUpperCase() || "C";
+
+  return (
+    <header className="sticky top-0 z-40 bg-white/70 backdrop-blur-xl border-b border-blue-100/50">
+      <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 sm:px-6">
+        {/* Left branding */}
+        <div className="flex items-center gap-3">
+          <div className="flex flex-col">
+            <span className="text-xs font-extrabold uppercase tracking-widest text-[#0077f6]">
+              AMET IST
+            </span>
+            <span className="text-base font-extrabold tracking-tight text-slate-900 leading-tight">
+              ShoreLeave
+            </span>
+          </div>
+          <span className="hidden sm:inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-[#0077f6] border border-blue-100">
+            Cadet
+          </span>
+        </div>
+
+        {/* Center Desktop Navigation */}
+        <nav className="hidden md:flex items-center gap-1 bg-white/90 rounded-full p-1 border border-slate-200/80 shadow-sm">
+          {[
+            { key: "home", label: "Home" },
+            { key: "leaves", label: "Leaves" },
+            { key: "apply", label: "Apply" },
+            { key: "pass", label: "Pass" },
+            { key: "profile", label: "Profile" },
+          ].map(({ key, label }) => {
+            const active = tab === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key as TabKey)}
+                className={`relative px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                  active
+                    ? "bg-[#0077f6] text-white shadow-sm"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Right action area */}
+        <div className="flex items-center gap-2.5">
+          <ShoreNotificationBell unreadCount={unread} onClick={onBell} />
+          <div className="hidden sm:flex items-center gap-2 pl-2 border-l border-slate-200">
+            <div className="grid h-9 w-9 place-items-center rounded-full bg-[#0077f6] text-white text-xs font-bold shadow-sm">
+              {initials}
+            </div>
+            <div className="text-left hidden lg:block leading-tight">
+              <div className="text-xs font-bold text-slate-900 truncate max-w-[120px]">{name}</div>
+              <div className="text-[10px] font-medium text-slate-500">{rollNo}</div>
+            </div>
+            <button
+              onClick={onSignOut}
+              title="Sign out"
+              className="grid h-8 w-8 place-items-center rounded-full text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/* =========================== FLOATING BOTTOM NAV (MOBILE) =========================== */
+function CadetBottomNav({
+  tab,
+  setTab,
+  onApplyAction,
+}: {
+  tab: TabKey;
+  setTab: (t: TabKey) => void;
+  onApplyAction: () => void;
+}) {
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-40 md:hidden pointer-events-none flex justify-center px-4 pb-4">
+      <div className="pointer-events-auto relative flex w-full max-w-md items-center justify-between rounded-full bg-white/95 px-3 py-2 shadow-[0_12px_40px_-10px_rgba(15,23,42,0.18)] border border-slate-200/90 backdrop-blur-xl">
+        {/* Home */}
+        <button
+          onClick={() => setTab("home")}
+          className={`flex flex-1 flex-col items-center justify-center py-1 transition-colors ${
+            tab === "home" ? "text-[#0077f6]" : "text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <Home className="h-5 w-5" />
+          <span className="mt-1 text-[10px] font-bold">Home</span>
+        </button>
+
+        {/* Leaves */}
+        <button
+          onClick={() => setTab("leaves")}
+          className={`flex flex-1 flex-col items-center justify-center py-1 transition-colors ${
+            tab === "leaves" ? "text-[#0077f6]" : "text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <FileText className="h-5 w-5" />
+          <span className="mt-1 text-[10px] font-bold">Leaves</span>
+        </button>
+
+        {/* Central Floating Apply Button */}
+        <div className="relative -mt-8 flex flex-col items-center">
+          <button
+            onClick={onApplyAction}
+            aria-label="Apply for leave"
+            className="grid h-14 w-14 place-items-center rounded-full bg-[#0077f6] text-white shadow-[0_8px_24px_rgba(0,119,246,0.45)] transition-transform active:scale-95 hover:bg-[#0062cc]"
+          >
+            <Plus className="h-7 w-7 stroke-[2.5]" />
+          </button>
+          <span className="mt-1 text-[10px] font-bold text-slate-700">Apply</span>
+        </div>
+
+        {/* Pass */}
+        <button
+          onClick={() => setTab("pass")}
+          className={`flex flex-1 flex-col items-center justify-center py-1 transition-colors ${
+            tab === "pass" ? "text-[#0077f6]" : "text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <QrCode className="h-5 w-5" />
+          <span className="mt-1 text-[10px] font-bold">Pass</span>
+        </button>
+
+        {/* Profile */}
+        <button
+          onClick={() => setTab("profile")}
+          className={`flex flex-1 flex-col items-center justify-center py-1 transition-colors ${
+            tab === "profile" ? "text-[#0077f6]" : "text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <User className="h-5 w-5" />
+          <span className="mt-1 text-[10px] font-bold">Profile</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== LEAVE BLOCKED BANNER =========================== */
 function LeaveBlockedBanner({ cadet }: { cadet: Cadet }) {
   const date = cadet.leave_blocked_date ? new Date(cadet.leave_blocked_date).toLocaleDateString() : "Not recorded";
   const until = cadet.leave_blocked_until ? new Date(cadet.leave_blocked_until).toLocaleDateString() : "Until manually restored";
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mb-4 rounded-[28px] border border-[#C05B4D]/30 bg-[#F2A488]/35 p-4 text-[#17061E]">
-      <div className="flex items-start gap-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-[#17061E] text-[#F5EFE6]"><Lock className="h-5 w-5" /></div>
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mb-6 rounded-3xl border border-rose-200 bg-rose-50/80 p-5 text-slate-900 shadow-sm">
+      <div className="flex items-start gap-4">
+        <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-rose-600 text-white">
+          <Lock className="h-5 w-5" />
+        </div>
         <div>
-          <div className="text-[14px] font-extrabold">Your leave privileges are currently suspended.</div>
-          <div className="mt-1 text-[12px] leading-relaxed text-[#17061E]/70">Reason: {cadet.leave_blocked_reason || "Administrative Hold"}</div>
-          <div className="mt-2 grid gap-1 text-[11px] font-semibold text-[#17061E]/60">
+          <div className="text-base font-bold text-rose-900">Your leave privileges are currently suspended.</div>
+          <div className="mt-1 text-sm text-slate-600">Reason: {cadet.leave_blocked_reason || "Administrative Hold"}</div>
+          <div className="mt-2 flex flex-wrap gap-4 text-xs font-semibold text-slate-500">
             <span>Blocked on: {date}</span>
             <span>Expiry: {until}</span>
           </div>
@@ -466,1168 +732,360 @@ function LeaveBlockedBanner({ cadet }: { cadet: Cadet }) {
   );
 }
 
-/* ================================ TOP BAR ================================ */
-function KlarnaTopBar({ name, rollNo, unread, onBell, onSignOut }: { name: string; rollNo: string; unread: number; onBell: () => void; onSignOut: () => void }) {
-  const first = name.split(" ")[0] ?? "Cadet";
-  const initials = name.split(" ").map(s => s[0]).join("").slice(0,2).toUpperCase() || "C";
-  return (
-    <header className="sticky top-0 z-30 bg-[#F5EFE6]/85 px-5 pb-3 backdrop-blur-xl" style={{ paddingTop: "max(1.5rem, env(safe-area-inset-top))" }}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-full bg-[#F4C7C7] text-[#17061E]">
-            <span className="text-sm font-bold">{initials}</span>
-          </div>
-          <div className="min-w-0">
-            <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[#17061E]/50">Hi, {first}</div>
-            <div className="truncate text-[15px] font-semibold leading-tight">Roll · {rollNo}</div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={onBell} aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`} className="relative grid h-10 w-10 place-items-center rounded-full bg-white text-[#17061E] ring-1 ring-[#17061E]/10">
-            <Bell className="h-[18px] w-[18px]" />
-            {unread > 0 && <span className="absolute -right-1 -top-1 grid min-h-5 min-w-5 place-items-center rounded-full bg-[#F2A488] px-1 text-[10px] font-bold ring-2 ring-white">{Math.min(unread, 99)}</span>}
-          </button>
-          <button onClick={onSignOut} aria-label="Sign out" className="grid h-10 w-10 place-items-center rounded-full bg-white text-[#17061E] ring-1 ring-[#17061E]/10">
-            <LogOut className="h-[18px] w-[18px]" />
-          </button>
-        </div>
-      </div>
-    </header>
-  );
-}
-
-/* =============================== TAB BAR ================================= */
-function KlarnaTabBar({ tab, setTab }: { tab: TabKey; setTab: (t: TabKey) => void }) {
-  const items: { key: TabKey; label: string; icon: typeof Home }[] = [
-    { key: "home", label: "Home", icon: Home },
-    { key: "leave", label: "Leave", icon: Calendar },
-    { key: "rewards", label: "Rewards", icon: Gift },
-    { key: "ranks", label: "Ranks", icon: Trophy },
-    { key: "profile", label: "Profile", icon: User },
-  ];
-  return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-4" style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}>
-      <div className="pointer-events-auto flex w-full max-w-md items-center justify-between rounded-full bg-[#17061E] px-2 py-2 shadow-[0_20px_50px_-20px_rgba(23,6,30,0.55)] sm:max-w-lg">
-        {items.map(({ key, label, icon: Icon }) => {
-          const active = tab === key;
-          return (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className="relative flex flex-1 items-center justify-center py-1"
-              aria-label={label}
-            >
-              {active && (
-                <motion.span
-                  layoutId="klarnaTabPill"
-                  transition={{ type: "spring", stiffness: 420, damping: 34 }}
-                  className="absolute inset-y-0 inset-x-1 rounded-full bg-[#F5EFE6]"
-                />
-              )}
-              <span className={`relative z-10 inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-[12px] font-semibold ${active ? "text-[#17061E]" : "text-[#F5EFE6]/70"}`}>
-                <Icon className="h-[16px] w-[16px]" />
-                {active && <span>{label}</span>}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/* ================================ HOME TAB =============================== */
-function HomeTab({
+/* =========================== 1. HOME VIEW (MATCHES APK EXACTLY) =========================== */
+function HomeView({
   name,
   requests,
+  cadet,
   onApply,
   onOpenLeave,
   onOpenGatePass,
-  onOpenFaceEnrollment,
-  onViewActivity,
+  onViewLeaves,
   onSendGatePassEmail,
   onDownloadGatePass,
   gateEmailBusy,
   leaveBlocked,
+  onBell,
+  unread,
 }: {
   name: string;
   requests: LeaveRequest[];
+  cadet?: Cadet;
   onApply: () => void;
   onOpenLeave: () => void;
   onOpenGatePass: () => void;
-  onOpenFaceEnrollment: () => void;
-  onViewActivity: () => void;
+  onViewLeaves: () => void;
   onSendGatePassEmail: (leave?: LeaveRequest) => void | Promise<void>;
   onDownloadGatePass: (leave?: LeaveRequest) => void;
   gateEmailBusy: boolean;
   leaveBlocked: boolean;
+  onBell: () => void;
+  unread: number;
 }) {
-  const current = requests.find(r => ["pending", "approved"].includes(r.status));
-  const first = name.split(" ")[0] ?? "Cadet";
+  const latestApproved = requests.find((r) => r.status === "approved");
+  const pendingLeave = requests.find((r) => r.status === "pending");
+  const currentLeave = latestApproved || pendingLeave;
+  const tokenBalance = cadet?.leave_token_balance;
+
+  // Month label for token wallet (e.g. "OCTOBER 2026")
+  const currentMonthLabel = (tokenBalance?.monthLabel || new Date().toLocaleString("en-US", { month: "long", year: "numeric" })).toUpperCase();
+  const allocated = tokenBalance?.allocation ?? tokenBalance?.monthlyAllocation ?? 28;
+  const available = tokenBalance?.available ?? cadet?.leave_tokens ?? 23;
+  const used = tokenBalance?.used ?? tokenBalance?.consumed ?? 0;
+  const reserved = tokenBalance?.reserved ?? 5;
+
   return (
-    <div className="space-y-4">
-      {/* Hero headline */}
-      <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="pt-2">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/55">Shore Leave · Today</div>
-        <h1 className="mt-2 text-[40px] font-extrabold leading-[0.95] tracking-tight">
-          Welcome back,<br />{first}.
-        </h1>
-        <p className="mt-3 text-[14px] leading-relaxed text-[#17061E]/65">
-          Your leaves, rewards and rank — all in one place.
-        </p>
-      </motion.section>
-
-      {/* Compliance hero card — pink blob */}
-      <ComplianceCard onOpenLeave={onOpenLeave} leaveBlocked={leaveBlocked} />
-
-      {/* Current leave */}
-      <CurrentLeaveCard leave={current} onApply={onApply} onSendGatePassEmail={onSendGatePassEmail} onDownloadGatePass={onDownloadGatePass} gateEmailBusy={gateEmailBusy} leaveBlocked={leaveBlocked} />
-
-      {/* Two-up: crates + streak */}
-      <div className="grid grid-cols-2 gap-3">
-        <LootTile />
-        <StreakTile />
+    <div className="space-y-6">
+      {/* Top Identity and Greeting (matches APK) */}
+      <div className="pt-2">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900">
+              Home
+            </h1>
+            <p className="mt-1 text-sm font-medium text-slate-500">
+              AMET IST - Cadet overview
+            </p>
+            <p className="mt-2 text-base sm:text-lg font-semibold text-slate-800">
+              {getGreeting(name)}
+            </p>
+          </div>
+          <div className="md:hidden">
+            <ShoreNotificationBell unreadCount={unread} onClick={onBell} />
+          </div>
+        </div>
       </div>
 
-      {/* Quick actions row */}
-      <QuickActions onApply={onApply} onOpenLeave={onOpenLeave} onOpenGatePass={onOpenGatePass} onOpenFaceEnrollment={onOpenFaceEnrollment} leaveBlocked={leaveBlocked} />
-
-      {/* Recent activity */}
-      <ActivityFeed onSeeAll={onViewActivity} />
-    </div>
-  );
-}
-
-function ComplianceCard({ onOpenLeave, leaveBlocked }: { onOpenLeave: () => void; leaveBlocked: boolean }) {
-  const xpTarget = 72;
-  const [xp, setXp] = useState(0);
-  useEffect(() => { const t = setTimeout(() => setXp(xpTarget), 100); return () => clearTimeout(t); }, []);
-  return (
-    <div className="relative overflow-hidden rounded-[32px] bg-[#F4C7C7] p-6">
-      <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/30" />
+      {/* Featured "YOUR NEXT STEP" Card (matches APK) */}
       <div className="relative">
-        <div className="inline-flex items-center gap-1.5 rounded-full bg-[#17061E] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#F5EFE6]">
-          <Star className="h-3 w-3" /> Level 8 · Cadet
-        </div>
-        <div className="mt-5 flex items-end gap-3">
-          <div className="text-[72px] font-extrabold leading-[0.85] tracking-tight text-[#17061E]">94<span className="text-3xl">%</span></div>
-          <div className="mb-3 inline-flex items-center gap-1 text-[12px] font-semibold text-[#17061E]"><TrendingUp className="h-3 w-3" /> +4%</div>
-        </div>
-        <div className="mt-1 text-[12px] font-medium text-[#17061E]/70">Compliance score this week</div>
-
-        <div className="mt-5">
-          <div className="flex items-center justify-between text-[11px] font-semibold text-[#17061E]/70">
-            <span>XP to next level</span>
-            <span>{xp}/100</span>
+        <div className="overflow-hidden rounded-[28px] bg-gradient-to-br from-[#54a0f7] via-[#2f88f5] to-[#1670ea] p-6 text-white shadow-[0_14px_36px_-10px_rgba(22,112,234,0.38)] border border-blue-400/30">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-slate-900/80 text-white font-extrabold text-sm shadow-inner">
+                OK
+              </div>
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-white/80">
+                  YOUR NEXT STEP
+                </span>
+                <h2 className="mt-1 text-2xl font-extrabold tracking-tight text-white">
+                  {latestApproved
+                    ? "Gate pass ready"
+                    : pendingLeave
+                    ? "Leave pending review"
+                    : "Ready for shore leave"}
+                </h2>
+                <p className="mt-1 text-sm font-medium text-white/90">
+                  {latestApproved
+                    ? `${latestApproved.reason || "Medical Leave"} - ${new Date(latestApproved.start_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}`
+                    : pendingLeave
+                    ? `${pendingLeave.destination} - Pending HOD approval`
+                    : "No pending leaves. Apply when you need an outing."}
+                </p>
+              </div>
+            </div>
           </div>
-          <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-[#17061E]/15">
-            <motion.div initial={{ width: 0 }} animate={{ width: `${xp}%` }} transition={{ duration: 1.2, ease: "easeOut" }}
-              className="h-full rounded-full bg-[#17061E]" />
+
+          <div className="mt-5 flex justify-end">
+            <button
+              type="button"
+              onClick={latestApproved ? onOpenGatePass : pendingLeave ? onViewLeaves : onApply}
+              className="rounded-full bg-white px-5 py-2 text-sm font-bold text-slate-900 shadow-md hover:bg-slate-50 transition-transform active:scale-95"
+            >
+              {latestApproved ? "View details" : pendingLeave ? "Track status" : "Apply now"}
+            </button>
           </div>
         </div>
+      </div>
 
-        <button onClick={onOpenLeave} disabled={leaveBlocked} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#17061E] px-5 py-3.5 text-[14px] font-semibold text-[#F5EFE6] transition-transform hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-55">
-          {leaveBlocked ? "Leave suspended" : "Take shore leave now"} <ArrowRight className="h-4 w-4" />
-        </button>
+      {/* "OCTOBER 2026 TOKEN WALLET" Card (matches APK) */}
+      <ShoreCard variant="default" padding="lg">
+        <div className="flex flex-col">
+          <div className="text-xs font-bold uppercase tracking-wider text-[#0077f6]">
+            {currentMonthLabel} TOKEN WALLET
+          </div>
+          <div className="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900">
+            {allocated} allocated · {available} available
+          </div>
+          <div className="mt-1 text-sm font-medium text-slate-500">
+            Used {used} · Reserved {reserved} · No carry-over
+          </div>
+        </div>
+      </ShoreCard>
+
+      {/* Prominent Primary Blue Action Button (matches APK) */}
+      <div className="pt-1">
+        <ShoreButton
+          variant="primary"
+          size="xl"
+          fullWidth
+          onClick={latestApproved ? onOpenGatePass : onApply}
+          className="shadow-lg shadow-blue-500/25 text-base sm:text-lg"
+        >
+          {latestApproved ? "View gate pass ->" : "Apply for leave ->"}
+        </ShoreButton>
+      </div>
+
+      {/* Leave Overview Cards Section */}
+      <div className="space-y-4 pt-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">
+            Recent Requests
+          </h3>
+          <button
+            type="button"
+            onClick={onViewLeaves}
+            className="text-xs font-bold text-[#0077f6] hover:underline"
+          >
+            See all
+          </button>
+        </div>
+
+        {requests.length === 0 ? (
+          <ShoreCard variant="subtle" padding="lg" className="text-center">
+            <p className="text-sm font-medium text-slate-600">
+              No leave requests submitted yet.
+            </p>
+            <button
+              onClick={onApply}
+              className="mt-3 text-xs font-bold text-[#0077f6] hover:underline"
+            >
+              Submit your first leave application
+            </button>
+          </ShoreCard>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {requests.slice(0, 4).map((r) => {
+              const startFormatted = new Date(r.start_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+              const endFormatted = new Date(r.end_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+              const isApproved = r.status === "approved";
+
+              return (
+                <ShoreCard key={r.id} variant="default" padding="md" className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      {r.reason || "Shore Leave"}
+                    </span>
+                    <ShoreStatusBadge status={r.status} size="sm" />
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-extrabold text-slate-900">
+                      {startFormatted} to {endFormatted}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
+                      <MapPin className="h-3.5 w-3.5 text-slate-400" />
+                      <span>{r.destination}</span>
+                    </div>
+                  </div>
+
+                  {isApproved && (
+                    <div className="pt-2 flex items-center gap-2 border-t border-slate-100">
+                      <button
+                        onClick={() => onDownloadGatePass(r)}
+                        className="text-xs font-bold text-[#0077f6] hover:underline"
+                      >
+                        Download pass
+                      </button>
+                      <span className="text-slate-300">·</span>
+                      <button
+                        onClick={() => onSendGatePassEmail(r)}
+                        disabled={gateEmailBusy}
+                        className="text-xs font-bold text-slate-600 hover:text-slate-900"
+                      >
+                        {gateEmailBusy ? "Sending…" : "Email pass"}
+                      </button>
+                    </div>
+                  )}
+                </ShoreCard>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function CurrentLeaveCard({
-  leave,
+/* =========================== 2. LEAVES VIEW =========================== */
+function LeavesView({
+  cadetId,
+  requests,
+  leaveBlocked,
   onApply,
   onSendGatePassEmail,
   onDownloadGatePass,
   gateEmailBusy,
-  leaveBlocked,
+  onOpenPass,
 }: {
-  leave?: LeaveRequest;
+  cadetId?: string;
+  requests: LeaveRequest[];
+  leaveBlocked: boolean;
   onApply: () => void;
-  onSendGatePassEmail: (leave?: LeaveRequest) => void | Promise<void>;
+  onSendGatePassEmail: (leave?: LeaveRequest) => void;
   onDownloadGatePass: (leave?: LeaveRequest) => void;
   gateEmailBusy: boolean;
-  leaveBlocked: boolean;
+  onOpenPass: () => void;
 }) {
-  if (!leave) {
-    return (
-      <div className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#17061E]/55">Current leave</div>
-        <div className="mt-2 text-[22px] font-bold tracking-tight">No active leave</div>
-        <p className="mt-1 text-[13px] text-[#17061E]/60">{leaveBlocked ? "Leave applications are disabled until administration restores access." : "Apply now to plan your next outing."}</p>
-        <button onClick={onApply} disabled={leaveBlocked} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full border border-[#17061E]/20 bg-transparent px-5 py-3 text-[13px] font-semibold text-[#17061E] hover:bg-[#17061E]/5 disabled:cursor-not-allowed disabled:opacity-50">
-          {leaveBlocked ? "Leave suspended" : "Apply for leave"} <ArrowRight className="h-4 w-4" />
-        </button>
-      </div>
-    );
-  }
-  if (leave.status === "pending") {
-    const steps = ["Applied", "Face", "HOD", "Pass"];
-    const active = 1;
-    return (
-      <div className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#F2A488]">Pending</div>
-            <div className="mt-1 text-[18px] font-bold">{leave.destination}</div>
-          </div>
-          <div className="rounded-full bg-[#F5D76E]/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-[#17061E]">On review</div>
-        </div>
-        <div className="mt-5 flex items-center">
-          {steps.map((s, i) => (
-            <div key={s} className="flex flex-1 items-center">
-              <div className="flex flex-col items-center">
-                <div className={`grid h-8 w-8 place-items-center rounded-full text-[11px] font-bold ${i <= active ? "bg-[#17061E] text-[#F5EFE6]" : "bg-[#17061E]/10 text-[#17061E]/50"}`}>
-                  {i < active ? <Check className="h-3 w-3" /> : i + 1}
-                </div>
-                <span className="mt-1 text-[10px] font-medium text-[#17061E]/60">{s}</span>
-              </div>
-              {i < steps.length - 1 && <div className={`mx-1 h-[3px] flex-1 rounded-full ${i < active ? "bg-[#17061E]" : "bg-[#17061E]/10"}`} />}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-  if (leave.status === "approved") {
-    return (
-      <div className="rounded-[28px] bg-[#C9DAB8] p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#17061E]/60">Gate pass · Approved</div>
-            <div className="mt-1 truncate text-[20px] font-bold tracking-tight">{leave.destination}</div>
-            <div className="text-[11px] font-medium text-[#17061E]/60">SL-{String(leave.id).slice(0,6).toUpperCase()}</div>
-          </div>
-          <div className="grid h-20 w-20 shrink-0 place-items-center rounded-2xl bg-[#17061E] text-[#F5EFE6]">
-            <KeyRound className="h-14 w-14" />
-          </div>
-        </div>
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <button type="button" onClick={() => onSendGatePassEmail(leave)} disabled={gateEmailBusy} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-[#17061E]/20 bg-white/60 px-3 py-2.5 text-[12px] font-semibold text-[#17061E] disabled:cursor-not-allowed disabled:opacity-60">
-            {gateEmailBusy ? "Sending..." : "Send email"}
-          </button>
-          <button type="button" onClick={() => onDownloadGatePass(leave)} className="inline-flex items-center justify-center gap-1.5 rounded-full bg-[#17061E] px-3 py-2.5 text-[12px] font-semibold text-[#F5EFE6]">Download</button>
-        </div>
-      </div>
-    );
-  }
-  return null;
-}
+  const [filter, setFilter] = useState<"all" | "pending" | "approved" | "active" | "rejected">("all");
 
-function LootTile() {
-  return (
-    <div className="relative overflow-hidden rounded-[28px] bg-[#D6C3F0] p-5">
-      <Package className="absolute -bottom-3 -right-3 h-24 w-24 text-[#17061E]/15" />
-      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#17061E]/60">Loot crates</div>
-      <div className="mt-2 text-[36px] font-extrabold leading-none tracking-tight">3</div>
-      <div className="mt-1 text-[12px] font-medium text-[#17061E]/60">Ready to open</div>
-    </div>
-  );
-}
-
-function StreakTile() {
-  return (
-    <div className="relative overflow-hidden rounded-[28px] bg-[#F5D76E] p-5">
-      <Flame className="absolute -bottom-3 -right-3 h-24 w-24 text-[#17061E]/15" />
-      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#17061E]/60">Streak</div>
-      <div className="mt-2 text-[36px] font-extrabold leading-none tracking-tight">12<span className="text-lg">d</span></div>
-      <div className="mt-1 text-[12px] font-medium text-[#17061E]/60">Keep it burning</div>
-    </div>
-  );
-}
-
-function QuickActions({
-  onApply,
-  onOpenLeave,
-  onOpenGatePass,
-  onOpenFaceEnrollment,
-  leaveBlocked,
-}: {
-  onApply: () => void;
-  onOpenLeave: () => void;
-  onOpenGatePass: () => void;
-  onOpenFaceEnrollment: () => void;
-  leaveBlocked: boolean;
-}) {
-  const actions = [
-    { icon: Anchor, label: "Shore leave", cta: onOpenLeave, blocked: true },
-    { icon: Plus, label: "Apply leave", cta: onApply, blocked: true },
-    { icon: KeyRound, label: "Gate pass", cta: onOpenGatePass, blocked: true },
-    { icon: ScanFace, label: "Face check", cta: onOpenFaceEnrollment },
-  ];
-  return (
-    <div className="rounded-[28px] bg-white p-4 ring-1 ring-[#17061E]/8">
-      <div className="grid grid-cols-4 gap-2">
-        {actions.map(a => (
-          <button key={a.label} onClick={a.cta} disabled={leaveBlocked && a.blocked} className="flex flex-col items-center gap-1.5 rounded-2xl py-3 transition-colors hover:bg-[#F5EFE6] disabled:cursor-not-allowed disabled:opacity-45">
-            <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[#F5EFE6] text-[#17061E]">
-              <a.icon className="h-[18px] w-[18px]" />
-            </span>
-            <span className="text-[11px] font-semibold text-[#17061E]">{a.label}</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ActivityFeed({ onSeeAll }: { onSeeAll: () => void }) {
-  const items = [
-    { text: "On-time return", xp: "+50", pos: true, when: "Today · 17:52" },
-    { text: "Late check-in", xp: "-30", pos: false, when: "Yesterday · 21:14" },
-    { text: "Crate unlocked", xp: "+20", pos: true, when: "Mon · 09:10" },
-    { text: "Streak +1", xp: "+10", pos: true, when: "Sun · 18:00" },
-  ];
-  return (
-    <div className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-      <div className="flex items-center justify-between">
-        <div className="text-[15px] font-bold">Recent activity</div>
-        <button type="button" onClick={onSeeAll} className="text-[11px] font-semibold text-[#17061E]/60 hover:text-[#17061E]">See all</button>
-      </div>
-      <ul className="mt-3 divide-y divide-[#17061E]/8">
-        {items.map((i, idx) => (
-          <li key={idx} className="flex items-center justify-between py-3">
-            <div className="min-w-0">
-              <div className="text-[13px] font-semibold">{i.text}</div>
-              <div className="text-[11px] font-medium text-[#17061E]/50">{i.when}</div>
-            </div>
-            <span className={`text-[13px] font-bold ${i.pos ? "text-[#3B7A57]" : "text-[#C05B4D]"}`}>{i.xp}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-/* ================================ LEAVE TAB ============================== */
-function LeaveTab({ cadetId, requests, leaveBlocked, blockReason, leaveTokens, maxLeaveTokens, tokenBalance }: { cadetId?: string; requests: LeaveRequest[]; leaveBlocked: boolean; blockReason?: string; leaveTokens: number; maxLeaveTokens: number; tokenBalance?: LeaveTokenBalance }) {
-  const grouped = useMemo(() => {
-    const g: Record<string, LeaveRequest[]> = {};
-    requests.forEach(r => {
-      const k = new Date(r.start_at).toLocaleString("en-US", { month: "long", year: "numeric" });
-      (g[k] ||= []).push(r);
+  const filteredRequests = useMemo(() => {
+    return requests.filter((r) => {
+      if (filter === "all") return true;
+      if (filter === "active") return r.status === "approved" || r.status === "out";
+      return r.status === filter;
     });
-    return g;
-  }, [requests]);
+  }, [requests, filter]);
 
   return (
-    <div className="space-y-5">
-      <PageHeadline eyebrow="Leave · Apply & track" title={<>Where are you<br />headed next?</>} />
+    <div className="space-y-6">
+      <ShorePageHeader
+        title="My Leaves"
+        subtitle="Track requests and past leave"
+        actions={
+          <ShoreButton variant="primary" size="md" onClick={onApply} disabled={leaveBlocked}>
+            <Plus className="h-4 w-4" /> Apply for Leave
+          </ShoreButton>
+        }
+      />
 
-      {/* Token wallet */}
-      <div className="rounded-[28px] bg-[#17061E] p-6 text-[#F5EFE6]">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#F5EFE6]/60">Leave tokens</div>
-        <div className="mt-3 flex items-end justify-between">
-          <div className="flex items-center gap-1.5">
-            {Array.from({ length: Math.max(1, maxLeaveTokens, leaveTokens) }).map((_, i) => (
-              <Coins key={i} className={`h-6 w-6 ${i < leaveTokens ? "text-[#F5D76E]" : "text-[#F5EFE6]/25"}`} />
-            ))}
-          </div>
-          <div className="text-right">
-            <div className="text-[32px] font-extrabold leading-none">{leaveTokens}<span className="text-[16px] text-[#F5EFE6]/60">/{maxLeaveTokens}</span></div>
-            <div className="text-[10px] font-medium uppercase tracking-widest text-[#F5EFE6]/50">Available</div>
-          </div>
-        </div>
-        <div className="mt-5 grid grid-cols-3 gap-2 border-t border-[#F5EFE6]/10 pt-4 text-center">
-          <TokenMiniStat label="Used" value={tokenBalance?.used ?? 0} />
-          <TokenMiniStat label="Reserved" value={tokenBalance?.reserved ?? 0} />
-          <TokenMiniStat label="Expired" value={tokenBalance?.expired ?? 0} />
-        </div>
-        <div className="mt-3 flex items-center justify-between rounded-2xl bg-[#F5EFE6]/8 px-3 py-2 text-[11px] font-semibold text-[#F5EFE6]/70">
-          <span>Current Month</span>
-          <span>{tokenBalance?.monthLabel ?? "Current month"}</span>
-        </div>
-      </div>
-
-      {tokenBalance && <TokenDetails balance={tokenBalance} />}
-
-      {leaveBlocked ? <LeaveBlockedPanel reason={blockReason} /> : cadetId && <NewRequestForm cadetId={cadetId} />}
-
-      <section className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-[15px] font-bold">Leave history</h2>
-          <span className="text-[11px] font-semibold text-[#17061E]/50">{requests.length} total</span>
-        </div>
-        {Object.keys(grouped).length === 0 && (
-          <p className="rounded-2xl bg-[#F5EFE6] p-5 text-center text-[13px] text-[#17061E]/60">No requests yet.</p>
-        )}
-        {Object.entries(grouped).map(([month, list]) => (
-          <div key={month} className="mb-4 last:mb-0">
-            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/50">{month}</div>
-            <div className="space-y-1.5">
-              {list.map((r) => {
-                const tone = r.status === "approved" ? "bg-[#C9DAB8] text-[#17061E]" : r.status === "rejected" ? "bg-[#F2A488]/60 text-[#17061E]" : "bg-[#F5D76E]/70 text-[#17061E]";
-                return (
-                  <div key={r.id} className="grid grid-cols-[1fr_auto] items-center gap-3 rounded-2xl bg-[#F5EFE6] p-3.5">
-                    <div className="min-w-0">
-                      <div className="truncate text-[13px] font-semibold">{r.destination}</div>
-                      <div className="text-[11px] text-[#17061E]/55">{new Date(r.start_at).toLocaleString()}</div>
-                    </div>
-                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${tone}`}>{r.status}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+      {/* Filter Pills (matches APK) */}
+      <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+        {[
+          { key: "all", label: "All" },
+          { key: "pending", label: "Pending" },
+          { key: "approved", label: "Approved" },
+          { key: "active", label: "Active" },
+          { key: "rejected", label: "Rejected" },
+        ].map(({ key, label }) => (
+          <ShoreFilterPill
+            key={key}
+            label={label}
+            active={filter === key}
+            onClick={() => setFilter(key as any)}
+          />
         ))}
-      </section>
-    </div>
-  );
-}
-
-function TokenMiniStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-2xl bg-[#F5EFE6]/8 px-2 py-3">
-      <div className="text-[18px] font-extrabold leading-none">{value}</div>
-      <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[#F5EFE6]/45">{label}</div>
-    </div>
-  );
-}
-
-function TokenDetails({ balance }: { balance: LeaveTokenBalance }) {
-  const transactions = balance.transactions ?? [];
-  return (
-    <section className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/50">Token details</div>
-          <h2 className="mt-1 text-[18px] font-extrabold">Current Month</h2>
-          <p className="mt-1 text-[12px] font-medium text-[#17061E]/55">{balance.monthLabel}</p>
-        </div>
-        <div className="rounded-2xl bg-[#F5EFE6] px-3 py-2 text-right">
-          <div className="text-[22px] font-extrabold leading-none">{balance.available ?? 0}</div>
-          <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#17061E]/45">Available</div>
-        </div>
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-2 text-[12px]">
-        <ReviewMetric label="Monthly Allocation" value={balance.monthlyAllocation ?? balance.allocation ?? 28} />
-        <ReviewMetric label="Consumed" value={balance.consumed ?? balance.used ?? 0} />
-        <ReviewMetric label="Reserved" value={balance.reserved ?? 0} />
-        <ReviewMetric label="Expired" value={balance.expired ?? 0} />
-      </div>
-      <div className="mt-4 border-t border-[#17061E]/8 pt-3">
-        <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.18em] text-[#17061E]/45">Transaction history</div>
-        {transactions.length === 0 ? (
-          <p className="rounded-2xl bg-[#F5EFE6] p-3 text-[12px] text-[#17061E]/55">No token transactions recorded yet.</p>
-        ) : (
-          <div className="space-y-2">
-            {transactions.slice(0, 6).map((entry, index) => (
-              <div key={entry.id ?? index} className="flex items-center justify-between rounded-2xl bg-[#F5EFE6] px-3 py-2">
-                <div className="min-w-0">
-                  <div className="truncate text-[12px] font-bold">{entry.reason || String(entry.type || "").replace(/_/g, " ")}</div>
-                  <div className="text-[10px] text-[#17061E]/50">{entry.timestamp ? new Date(entry.timestamp).toLocaleDateString() : ""}</div>
-                </div>
-                <div className={`text-[12px] font-extrabold ${(entry.amount ?? 0) >= 0 ? "text-[#3B7A57]" : "text-[#C05B4D]"}`}>
-                  {(entry.amount ?? 0) > 0 ? "+" : ""}{entry.amount ?? 0}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function ReviewMetric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-2xl bg-[#F5EFE6] p-3">
-      <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#17061E]/45">{label}</div>
-      <div className="mt-1 text-[18px] font-extrabold">{value}</div>
-    </div>
-  );
-}
-
-function TokenQuoteStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-2xl bg-white p-3">
-      <div className="text-[16px] font-extrabold">{value}</div>
-      <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[#17061E]/45">{label}</div>
-    </div>
-  );
-}
-
-function LeaveBlockedPanel({ reason }: { reason?: string }) {
-  return (
-    <section className="rounded-[28px] border border-[#C05B4D]/25 bg-[#F2A488]/30 p-5 text-[#17061E]">
-      <div className="flex items-start gap-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-[#17061E] text-[#F5EFE6]"><Lock className="h-5 w-5" /></div>
-        <div>
-          <h2 className="text-[16px] font-extrabold">Leave requests are disabled</h2>
-          <p className="mt-1 text-[13px] leading-relaxed text-[#17061E]/70">
-            Your leave privileges are suspended. Reason: {reason || "Administrative Hold"}. You can still view leave history, notifications, and your profile.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* =============================== REWARDS TAB ============================= */
-function RewardsTab() {
-  const [opening, setOpening] = useState(false);
-  const [revealed, setRevealed] = useState<null | { tier: string; prize: string }>(null);
-  function openCrate() {
-    setOpening(true); setRevealed(null);
-    setTimeout(() => { setOpening(false); setRevealed({ tier: "Epic", prize: "Movie pass · 2 tickets" }); }, 1600);
-  }
-  const badges = [
-    { name: "Punctual", earned: true, prog: 100 },
-    { name: "Explorer", earned: true, prog: 100 },
-    { name: "Streak 30", earned: false, prog: 40 },
-    { name: "Top 10", earned: true, prog: 100 },
-    { name: "Veteran", earned: false, prog: 65 },
-    { name: "Pathfinder", earned: false, prog: 22 },
-  ];
-  return (
-    <div className="space-y-5">
-      <PageHeadline eyebrow="Rewards · Loot & badges" title={<>Open crates,<br />earn badges.</>} />
-
-      {/* Crate */}
-      <div className="relative overflow-hidden rounded-[32px] bg-[#D6C3F0] p-6">
-        <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-white/40" />
-        <div className="relative">
-          <div className="flex items-center justify-between">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/60">Loot crate</div>
-            <div className="inline-flex gap-1 text-[9px] font-semibold uppercase tracking-wider text-[#17061E]/50">
-              {["Common", "Rare", "Epic", "Legendary"].map(t => <span key={t} className="rounded-full bg-white/50 px-2 py-0.5">{t}</span>)}
-            </div>
-          </div>
-          <div className="mt-4 grid place-items-center py-6">
-            <motion.div
-              animate={opening ? { rotate: [0, -8, 8, -8, 8, 0], scale: [1, 1.05, 1.05, 1.05, 1.05, 1] } : { rotate: 0 }}
-              transition={{ duration: 1.2 }}
-              className="grid h-32 w-32 place-items-center rounded-[2rem] bg-[#17061E]"
-            >
-              <Package className="h-14 w-14 text-[#F5EFE6]" />
-            </motion.div>
-            <AnimatePresence>
-              {revealed && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-4 text-center">
-                  <div className="inline-flex items-center gap-1.5 rounded-full bg-[#17061E] px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-[#F5EFE6]"><PartyPopper className="h-3 w-3" /> {revealed.tier}</div>
-                  <div className="mt-2 text-[16px] font-bold">{revealed.prize}</div>
-                  <div className="text-[11px] text-[#17061E]/60">Collect from admin office</div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-          <button onClick={openCrate} disabled={opening} className="w-full rounded-full bg-[#17061E] px-5 py-3.5 text-[14px] font-semibold text-[#F5EFE6] disabled:opacity-60">
-            {opening ? "Opening…" : "Open crate"}
-          </button>
-        </div>
       </div>
 
-      {/* This month */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-[28px] bg-[#C9DAB8] p-5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#17061E]/60">This month</div>
-          <div className="mt-2 text-[32px] font-extrabold leading-none tracking-tight">+620</div>
-          <div className="mt-1 text-[12px] font-medium text-[#17061E]/60">XP earned</div>
-        </div>
-        <div className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#17061E]/60">Growth</div>
-          <div className="mt-2 inline-flex items-baseline gap-1 text-[32px] font-extrabold leading-none tracking-tight">
-            +18<span className="text-lg">%</span>
-          </div>
-          <div className="mt-1 inline-flex items-center gap-1 text-[12px] font-semibold text-[#3B7A57]"><TrendingUp className="h-3 w-3" /> vs last month</div>
-        </div>
-      </div>
+      {/* Leave Cards Grid */}
+      {filteredRequests.length === 0 ? (
+        <ShoreEmptyState
+          icon={<FileText className="h-8 w-8" />}
+          title="No leaves found"
+          description={
+            filter === "all"
+              ? "You haven't submitted any leave applications yet."
+              : `No leaves match the "${filter}" filter.`
+          }
+          actionLabel="Apply for Leave"
+          onAction={onApply}
+        />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          {filteredRequests.map((r) => {
+            const startStr = new Date(r.start_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+            const endStr = new Date(r.end_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+            const isApproved = r.status === "approved";
 
-      {/* Badge grid */}
-      <section className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[15px] font-bold">Badge collection</h2>
-          <span className="text-[11px] font-semibold text-[#17061E]/50">{badges.filter(b => b.earned).length} of {badges.length}</span>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          {badges.map(b => (
-            <div key={b.name} className={`rounded-2xl p-3 text-center ${b.earned ? "bg-[#F5D76E]" : "bg-[#F5EFE6]"}`}>
-              <div className={`mx-auto grid h-12 w-12 place-items-center rounded-full ${b.earned ? "bg-[#17061E] text-[#F5EFE6]" : "bg-white text-[#17061E]/30"}`}>
-                <Medal className="h-5 w-5" />
-              </div>
-              <div className="mt-2 truncate text-[11px] font-bold text-[#17061E]">{b.name}</div>
-              {!b.earned && (
-                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[#17061E]/10">
-                  <div className="h-full bg-[#17061E]" style={{ width: `${b.prog}%` }} />
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* XP guide */}
-      <div className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-        <div className="mb-3 text-[15px] font-bold">XP guide</div>
-        <ul className="divide-y divide-[#17061E]/8">
-          <li className="flex justify-between py-2.5"><span className="text-[13px] text-[#17061E]/70">On time return</span><span className="text-[13px] font-bold text-[#3B7A57]">+50</span></li>
-          <li className="flex justify-between py-2.5"><span className="text-[13px] text-[#17061E]/70">Early return</span><span className="text-[13px] font-bold text-[#3B7A57]">+75</span></li>
-          <li className="flex justify-between py-2.5"><span className="text-[13px] text-[#17061E]/70">Late return</span><span className="text-[13px] font-bold text-[#C05B4D]">-30</span></li>
-          <li className="flex justify-between py-2.5"><span className="text-[13px] text-[#17061E]/70">Overdue</span><span className="text-[13px] font-bold text-[#C05B4D]">-100</span></li>
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-/* ================================ RANKS TAB ============================== */
-function RanksTab({ name }: { name: string }) {
-  const board = [
-    { rank: 1, name: "Arjun M.", xp: 1820 },
-    { rank: 2, name: "Vikram S.", xp: 1740 },
-    { rank: 3, name: "Rohit K.", xp: 1685 },
-    { rank: 4, name, xp: 1620, me: true },
-    { rank: 5, name: "Sahil P.", xp: 1590 },
-    { rank: 6, name: "Karan D.", xp: 1530 },
-    { rank: 7, name: "Nikhil J.", xp: 1495 },
-    { rank: 8, name: "Ravi T.", xp: 1450 },
-    { rank: 9, name: "Aman B.", xp: 1410 },
-    { rank: 10, name: "Ishaan G.", xp: 1380 },
-  ];
-  return (
-    <div className="space-y-5">
-      <PageHeadline eyebrow="Ranks · Monthly board" title={<>You're #4<br />this month.</>} />
-
-      {/* Your rank hero */}
-      <div className="relative overflow-hidden rounded-[32px] bg-[#F2A488] p-6">
-        <Trophy className="absolute -right-4 -bottom-4 h-32 w-32 text-[#17061E]/15" />
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/60">Your rank</div>
-        <div className="mt-2 flex items-end gap-3">
-          <div className="text-[72px] font-extrabold leading-[0.85] tracking-tight">#4</div>
-          <div className="mb-3 inline-flex items-center gap-1 text-[12px] font-semibold text-[#17061E]"><TrendingUp className="h-3 w-3" /> +2 this week</div>
-        </div>
-        <div className="mt-5 grid grid-cols-3 gap-3 border-t border-[#17061E]/15 pt-4">
-          <Stat label="Compliance" value="94%" />
-          <Stat label="XP / mo" value="620" />
-          <Stat label="Streak" value="12d" />
-        </div>
-      </div>
-
-      {/* Leaderboard */}
-      <div className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-[15px] font-bold">Top 10 · Monthly</h2>
-          <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#17061E]/55"><Clock className="h-3 w-3" /> Resets in 9d</div>
-        </div>
-        <ul className="space-y-1.5">
-          {board.map(r => {
-            const crown = r.rank === 1 ? "text-[#F5D76E]" : r.rank === 2 ? "text-[#17061E]/60" : r.rank === 3 ? "text-[#F2A488]" : "";
-            const me = r.me;
             return (
-              <li key={r.rank} className={`grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-2xl px-4 py-3 ${me ? "bg-[#17061E] text-[#F5EFE6]" : "bg-[#F5EFE6]"}`}>
-                <span className="flex w-8 items-center gap-2">
-                  {r.rank <= 3 ? <Crown className={`h-4 w-4 ${me ? "text-[#F5D76E]" : crown}`} /> : <span className={`text-[12px] font-bold ${me ? "text-[#F5EFE6]/70" : "text-[#17061E]/50"}`}>{r.rank}</span>}
-                </span>
-                <span className="min-w-0 truncate text-[13px] font-semibold">{r.name}{me && " · You"}</span>
-                <span className="text-[12px] font-bold opacity-80">{r.xp} XP</span>
-              </li>
+              <ShoreCard key={r.id} variant="default" padding="lg" className="space-y-4">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    {r.reason || "Shore Leave"}
+                  </span>
+                  <ShoreStatusBadge status={r.status} />
+                </div>
+
+                <div>
+                  <h4 className="text-lg font-extrabold text-slate-900">
+                    {startStr} to {endStr}
+                  </h4>
+                  <div className="mt-1 flex items-center gap-1.5 text-sm text-slate-600">
+                    <MapPin className="h-4 w-4 text-slate-400" />
+                    <span>{r.destination}</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+                  <span className="text-xs text-slate-400 font-mono">
+                    ID: {String(r.id).slice(0, 8)}
+                  </span>
+
+                  <div className="flex items-center gap-2">
+                    {isApproved ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={onOpenPass}
+                          className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-[#0077f6] hover:bg-blue-100 transition-colors"
+                        >
+                          View Pass
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDownloadGatePass(r)}
+                          className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200 transition-colors"
+                        >
+                          Download
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-xs font-medium text-slate-500">
+                        {r.status === "pending" ? "Awaiting Review" : "Request Closed"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </ShoreCard>
             );
           })}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-[16px] font-bold">{value}</div>
-      <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#17061E]/60">{label}</div>
-    </div>
-  );
-}
-
-/* ============================== PROFILE TAB ============================== */
-function ProfileTab({
-  name,
-  rollNo,
-  department,
-  faceEnrolled,
-  requests,
-  onFaceEnroll,
-  onEditProfile,
-  onSignOut,
-  onDeleteAccount,
-}: {
-  name: string;
-  rollNo: string;
-  department: string;
-  faceEnrolled: boolean;
-  requests: LeaveRequest[];
-  onFaceEnroll: () => void;
-  onEditProfile: () => void;
-  onSignOut: () => void;
-  onDeleteAccount: () => void;
-}) {
-  const total = requests.length;
-  const initials = name.split(" ").map(s => s[0]).join("").slice(0,2).toUpperCase() || "C";
-  const [push, setPush] = useState(true);
-  const [email, setEmail] = useState(true);
-  const [streak, setStreak] = useState(true);
-  const [overdue, setOverdue] = useState(true);
-  return (
-    <div className="space-y-5">
-      <PageHeadline eyebrow="Profile · Your identity" title={<>Hey,<br />{name.split(" ")[0]}.</>} />
-
-      {/* Identity card */}
-      <div className="rounded-[32px] bg-[#17061E] p-6 text-[#F5EFE6]">
-        <div className="flex items-center gap-4">
-          <button type="button" onClick={onEditProfile} aria-label="Request profile update" className="relative grid h-16 w-16 place-items-center rounded-2xl bg-[#F4C7C7] text-[#17061E] text-lg font-bold">
-            {initials}
-            <span className="absolute -bottom-1.5 -right-1.5 grid h-6 w-6 place-items-center rounded-full bg-[#F5EFE6] text-[#17061E] ring-2 ring-[#17061E]">
-              <Pencil className="h-3 w-3" />
-            </span>
-          </button>
-          <div className="min-w-0">
-            <div className="truncate text-[18px] font-bold tracking-tight">{name}</div>
-            <div className="mt-0.5 text-[11px] font-medium uppercase tracking-widest text-[#F5EFE6]/55">Roll · {rollNo}</div>
-            <div className="text-[11px] font-medium text-[#F5EFE6]/55">{department}</div>
-          </div>
         </div>
-      </div>
-
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 gap-3">
-        <MiniStat label="Total leaves" value={String(total)} tone="bg-white ring-1 ring-[#17061E]/8" />
-        <MiniStat label="Days outside" value="38" tone="bg-[#F5D76E]" />
-        <MiniStat label="On-time %" value="92%" tone="bg-[#C9DAB8]" />
-        <MiniStat label="Longest streak" value="18d" tone="bg-[#F4C7C7]" />
-      </div>
-
-      {/* Face enrollment */}
-      <div className={`rounded-[28px] p-5 ${faceEnrolled ? "bg-[#C9DAB8]" : "bg-[#F2A488]/70"}`}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-[#17061E] text-[#F5EFE6]">
-              <ScanFace className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="text-[14px] font-bold">Face enrollment</div>
-              <div className="text-[11px] font-medium text-[#17061E]/60">{faceEnrolled ? "Enrolled · Jul 12, 2025" : "Not enrolled yet"}</div>
-            </div>
-          </div>
-          {!faceEnrolled && (
-            <button type="button" onClick={onFaceEnroll} className="rounded-full bg-[#17061E] px-4 py-2 text-[11px] font-semibold text-[#F5EFE6]">Enroll</button>
-          )}
-        </div>
-      </div>
-
-      {/* Notifications */}
-      <div className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-        <div className="mb-2 text-[15px] font-bold">Notifications</div>
-        <Toggle label="Push notifications" on={push} set={setPush} />
-        <Toggle label="Email digest" on={email} set={setEmail} />
-        <Toggle label="Streak reminders" on={streak} set={setStreak} />
-        <Toggle label="Overdue alerts" on={overdue} set={setOverdue} />
-      </div>
-
-      {/* Physical prizes */}
-      <div className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-        <div className="mb-3 inline-flex items-center gap-2 text-[15px] font-bold"><Gift className="h-4 w-4" /> Physical prizes</div>
-        <ul className="divide-y divide-[#17061E]/8">
-          <li className="flex items-center justify-between py-2.5"><span className="text-[13px]">Movie pass · 2 tickets</span><span className="rounded-full bg-[#F5D76E]/70 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider">Pending</span></li>
-          <li className="flex items-center justify-between py-2.5"><span className="text-[13px]">Canteen voucher</span><span className="rounded-full bg-[#C9DAB8] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider">Collected</span></li>
-        </ul>
-      </div>
-
-      {/* Help + Logout */}
-      <div className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-        <div className="text-[14px] font-bold">Need help?</div>
-        <p className="mt-1 text-[12px] text-[#17061E]/60">Reach out to the duty officer at the admin office for any account issues.</p>
-      </div>
-      <button onClick={onSignOut} className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-[#17061E]/20 bg-transparent px-5 py-3.5 text-[14px] font-semibold text-[#17061E] hover:bg-[#17061E]/5">
-        <LogOut className="h-4 w-4" /> Log out
-      </button>
-      <button onClick={onDeleteAccount} className="inline-flex w-full items-center justify-center rounded-full border border-red-700/30 bg-transparent px-5 py-3 text-[13px] font-semibold text-red-800 hover:bg-red-50">
-        Delete my account data
-      </button>
-
-      <p className="pt-2 text-center text-[11px] font-medium text-[#17061E]/40">
-        Shore Leave · AMET campus operations
-      </p>
-    </div>
-  );
-}
-
-function MiniStat({ label, value, tone }: { label: string; value: string; tone: string }) {
-  return (
-    <div className={`rounded-[24px] p-5 ${tone}`}>
-      <div className="text-[28px] font-extrabold leading-none tracking-tight">{value}</div>
-      <div className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/60">{label}</div>
-    </div>
-  );
-}
-
-function Toggle({ label, on, set }: { label: string; on: boolean; set: (v: boolean) => void }) {
-  return (
-    <button onClick={() => set(!on)} className="flex w-full items-center justify-between py-2.5 text-[13px] font-medium">
-      <span>{label}</span>
-      <span className={`relative h-6 w-11 rounded-full transition-colors ${on ? "bg-[#17061E]" : "bg-[#17061E]/15"}`}>
-        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
-      </span>
-    </button>
-  );
-}
-
-/* =============================== PAGE HEAD =============================== */
-function PageHeadline({ eyebrow, title }: { eyebrow: string; title: React.ReactNode }) {
-  return (
-    <div className="pt-2">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/55">{eyebrow}</div>
-      <h1 className="mt-2 text-[40px] font-extrabold leading-[0.95] tracking-tight">{title}</h1>
-    </div>
-  );
-}
-
-/* ============================ SHORE LEAVE DRAWER ========================= */
-function ShoreLeaveDrawer({ open, onOpenChange, cadetId, leaveBlocked, blockReason }: { open: boolean; onOpenChange: (v: boolean) => void; cadetId?: string; leaveBlocked: boolean; blockReason?: string }) {
-  const [destination, setDestination] = useState("");
-  const [reason, setReason] = useState("");
-  const [submitted, setSubmitted] = useState(false);
-  const qc = useQueryClient();
-  const mut = useMutation({
-    mutationFn: async () => {
-      if (!cadetId) throw new Error("No cadet profile linked");
-      if (leaveBlocked) {
-        const error = new Error(blockReason || "Your leave privileges are currently suspended.");
-        error.name = "LEAVE_BLOCKED";
-        throw error;
-      }
-      await apiRequest<MutationResult>(endpoints.cadet.shoreLeaveRequest, {
-        method: "POST",
-        body: JSON.stringify({ destination, reason: reason || "Shore leave" }),
-      });
-    },
-    onSuccess: () => {
-      setSubmitted(true);
-      qc.invalidateQueries({ queryKey: queryKeys.cadet.leaveRequests(cadetId) });
-      setTimeout(() => { onOpenChange(false); setSubmitted(false); setDestination(""); setReason(""); }, 2200);
-    },
-    onError: (error: unknown) => toast.error(getErrorMessage(error, "Failed")),
-  });
-
-  return (
-    <AnimatePresence>
-      {open && (
-        <>
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => onOpenChange(false)}
-            className="fixed inset-0 z-50 bg-[#17061E]/40 backdrop-blur-sm" />
-          <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", stiffness: 320, damping: 32 }}
-            className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-md rounded-t-[32px] bg-[#F5EFE6] p-6 pb-8 sm:max-w-lg">
-            <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-[#17061E]/15" />
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/55">Instant · Auto approval</div>
-                <h2 className="mt-1 text-[26px] font-extrabold tracking-tight">Shore leave</h2>
-              </div>
-              <button onClick={() => onOpenChange(false)} className="grid h-9 w-9 place-items-center rounded-full bg-white ring-1 ring-[#17061E]/10"><X className="h-4 w-4" /></button>
-            </div>
-            <p className="mt-1 text-[12px] text-[#17061E]/60">Returns are locked to 18:00.</p>
-
-            {leaveBlocked ? (
-              <div className="mt-6 rounded-[24px] border border-[#C05B4D]/25 bg-[#F2A488]/30 p-5">
-                <div className="flex items-start gap-3">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-[#17061E] text-[#F5EFE6]"><Lock className="h-5 w-5" /></div>
-                  <div>
-                    <h3 className="text-[15px] font-extrabold">Gate pass generation is disabled</h3>
-                    <p className="mt-1 text-[13px] leading-relaxed text-[#17061E]/70">
-                      Your leave privileges are currently suspended. Reason: {blockReason || "Administrative Hold"}.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ) : !submitted ? (
-              <form onSubmit={(e) => { e.preventDefault(); mut.mutate(); }} className="mt-5 space-y-3">
-                <KField label="Destination" value={destination} onChange={setDestination} required />
-                <KField label="Reason" value={reason} onChange={setReason} />
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl bg-white p-3 ring-1 ring-[#17061E]/10">
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#17061E]/55">Time out</div>
-                    <div className="mt-1 inline-flex items-center gap-1.5 text-[13px] font-bold"><Lock className="h-3 w-3" /> Now</div>
-                  </div>
-                  <div className="rounded-2xl bg-white p-3 ring-1 ring-[#17061E]/10">
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#17061E]/55">Time in</div>
-                    <div className="mt-1 inline-flex items-center gap-1.5 text-[13px] font-bold"><Lock className="h-3 w-3" /> 18:00</div>
-                  </div>
-                </div>
-                <button type="submit" disabled={mut.isPending}
-                  className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#17061E] px-5 py-4 text-[14px] font-semibold text-[#F5EFE6] disabled:opacity-60">
-                  {mut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                  Generate gate pass
-                </button>
-              </form>
-            ) : (
-              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="mt-8 text-center">
-                <div className="mx-auto grid h-44 w-44 place-items-center rounded-3xl bg-[#17061E] text-[#F5EFE6]">
-                  <KeyRound className="h-32 w-32" />
-                </div>
-                <div className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-bold text-[#3B7A57]"><CheckCircle2 className="h-4 w-4" /> Pass approved</div>
-                <p className="mt-1 text-[12px] text-[#17061E]/60">Use your fingerprint first. This emergency code is for manual gate verification only.</p>
-              </motion.div>
-            )}
-          </motion.div>
-        </>
       )}
-    </AnimatePresence>
-  );
-}
-
-function KField({ label, value, onChange, required, type = "text" }: { label: string; value: string; onChange: (v: string) => void; required?: boolean; type?: string }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-[#17061E]/55">{label}</span>
-      <input required={required} value={value} type={type} onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-2xl bg-white px-4 py-3.5 text-[14px] font-medium text-[#17061E] outline-none ring-1 ring-[#17061E]/10 focus:ring-2 focus:ring-[#17061E]" />
-    </label>
-  );
-}
-
-/* ============================ NOTIFICATIONS SHEET ======================== */
-function NotificationsSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
-  const qc = useQueryClient();
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: queryKeys.cadet.notifications,
-    queryFn: () => apiRequest<NotificationPage>(endpoints.notifications.list("?limit=50")),
-    enabled: open,
-  });
-  const markRead = useMutation({ mutationFn: (id: string) => apiRequest(endpoints.notifications.read(id), { method: "PATCH" }), onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.cadet.notifications }) });
-  const markAll = useMutation({ mutationFn: () => apiRequest(endpoints.notifications.markAllRead, { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.cadet.notifications }) });
-  const items = data?.notifications ?? [];
-  return (
-    <AnimatePresence>
-      {open && (
-        <>
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => onOpenChange(false)}
-            className="fixed inset-0 z-50 bg-[#17061E]/40 backdrop-blur-sm" />
-          <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", stiffness: 320, damping: 32 }}
-            className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-md rounded-t-[32px] bg-[#F5EFE6] p-6 pb-8 sm:max-w-lg">
-            <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-[#17061E]/15" />
-            <div className="flex items-center justify-between">
-              <div><h2 className="text-[26px] font-extrabold tracking-tight">Inbox</h2><button disabled={!data?.unread} onClick={() => markAll.mutate()} className="text-xs font-semibold text-[#17061E]/60">Mark all read</button></div>
-              <button onClick={() => onOpenChange(false)} className="grid h-9 w-9 place-items-center rounded-full bg-white ring-1 ring-[#17061E]/10"><X className="h-4 w-4" /></button>
-            </div>
-            <ul className="mt-4 space-y-2">
-              {isLoading && <li className="rounded-2xl bg-white p-4 text-sm text-[#17061E]/60">Loading notifications…</li>}
-              {isError && <li className="rounded-2xl bg-white p-4 text-sm text-red-700">Could not load notifications. <button onClick={() => refetch()} className="font-bold underline">Retry</button></li>}
-              {!isLoading && !isError && items.length === 0 && <li className="rounded-2xl bg-white p-5 text-center text-sm text-[#17061E]/60">No notifications yet.</li>}
-              {items.map((n) => (
-                <li key={n.notificationId} className={`flex gap-3 rounded-2xl bg-white p-4 ring-1 ${n.read ? "ring-[#17061E]/8" : "ring-[#F2A488]"}`} onClick={() => { if (!n.read) markRead.mutate(n.notificationId); }}>
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#F5D76E]">
-                    <Bell className="h-5 w-5 text-[#17061E]" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-bold">{n.title}</div>
-                    <div className="text-[12px] text-[#17061E]/60">{n.message}</div>
-                    <time className="mt-1 block text-[10px] text-[#17061E]/40">{new Date(n.createdAt).toLocaleString()}</time>
-                  </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-[#17061E]/30 self-center" />
-                </li>
-              ))}
-            </ul>
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
-  );
-}
-
-/* ============================== ONBOARDING =============================== */
-function Onboarding({ step, setStep, name }: { step: OnboardStep; setStep: (s: OnboardStep) => void; name: string }) {
-  if (step === "attention") return <AttentionStep name={name} onDone={() => setStep("done")} />;
-
-  return (
-    <div className="relative grid min-h-screen place-items-center bg-[#F5EFE6] px-6 text-[#17061E]">
-      <AnimatePresence mode="wait">
-        <motion.div key={step} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }}
-          className="w-full max-w-md">
-          {step === "welcome" && (
-            <>
-              <div className="mx-auto mb-6 grid h-16 w-16 place-items-center rounded-2xl bg-[#F4C7C7]">
-                <Sparkles className="h-7 w-7 text-[#17061E]" />
-              </div>
-              <h1 className="text-center text-[44px] font-extrabold leading-[0.95] tracking-tight">
-                Welcome,<br />{name.split(" ")[0]}.
-              </h1>
-              <p className="mx-auto mt-4 max-w-xs text-center text-[14px] leading-relaxed text-[#17061E]/65">
-                Smart shore leave for cadets. Earn XP, badges and crates as you keep in step.
-              </p>
-              <div className="mt-8 space-y-3">
-                <button onClick={() => setStep("permissions")} className="w-full rounded-full bg-[#17061E] px-5 py-4 text-[15px] font-semibold text-[#F5EFE6]">
-                  Get started
-                </button>
-              </div>
-            </>
-          )}
-          {step === "permissions" && (
-            <>
-              <div className="text-center text-[11px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/55">Step 2 of 3</div>
-              <h1 className="mt-3 text-center text-[36px] font-extrabold leading-[0.95] tracking-tight">
-                Allow<br />permissions.
-              </h1>
-              <p className="mx-auto mt-3 max-w-xs text-center text-[14px] leading-relaxed text-[#17061E]/65">
-                Camera and location keep your check-ins secure.
-              </p>
-              <div className="mt-6 space-y-2">
-                <PermRow icon={Camera} label="Camera" desc="Face verification at gate" />
-                <PermRow icon={MapPinned} label="Location" desc="Confirm you are inside campus" />
-              </div>
-              <div className="mt-6 space-y-3">
-                <button onClick={() => setStep("otp")} className="w-full rounded-full bg-[#17061E] px-5 py-4 text-[15px] font-semibold text-[#F5EFE6]">
-                  Allow &amp; continue
-                </button>
-                <button onClick={() => setStep("otp")} className="w-full rounded-full border border-[#17061E]/25 bg-transparent px-5 py-4 text-[15px] font-semibold text-[#17061E]">
-                  Not now
-                </button>
-              </div>
-            </>
-          )}
-          {step === "otp" && <OtpStep onDone={() => setStep("attention")} />}
-        </motion.div>
-      </AnimatePresence>
     </div>
   );
 }
 
-function PermRow({ icon: Icon, label, desc }: { icon: typeof Camera; label: string; desc: string }) {
-  return (
-    <div className="flex items-center gap-3 rounded-2xl bg-white p-4 ring-1 ring-[#17061E]/10">
-      <div className="grid h-11 w-11 place-items-center rounded-2xl bg-[#F5EFE6] text-[#17061E]"><Icon className="h-5 w-5" /></div>
-      <div className="min-w-0">
-        <div className="text-[14px] font-bold">{label}</div>
-        <div className="text-[11px] text-[#17061E]/60">{desc}</div>
-      </div>
-    </div>
-  );
-}
-
-function OtpStep({ onDone }: { onDone: () => void }) {
-  const [digits, setDigits] = useState(["", "", "", "", "", ""]);
-  function set(i: number, v: string) {
-    const cleaned = v.replace(/\D/g, "").slice(-1);
-    const next = [...digits]; next[i] = cleaned; setDigits(next);
-    const el = document.getElementById(`otp-${i + 1}`); if (cleaned && el) (el as HTMLInputElement).focus();
-  }
-  const complete = digits.every(d => d);
-  return (
-    <>
-      <div className="text-center text-[11px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/55">Step 3 of 3</div>
-      <h1 className="mt-3 text-center text-[36px] font-extrabold leading-[0.95] tracking-tight">
-        Verify<br />it's you.
-      </h1>
-      <p className="mx-auto mt-3 max-w-xs text-center text-[14px] leading-relaxed text-[#17061E]/65">
-        We sent a 6-digit code to your registered mobile.
-      </p>
-      <div className="mx-auto mt-6 flex max-w-xs justify-between gap-2">
-        {digits.map((d, i) => (
-          <input key={i} id={`otp-${i}`} value={d} onChange={(e) => set(i, e.target.value)}
-            inputMode="numeric" maxLength={1}
-            className="h-14 w-11 rounded-2xl bg-white text-center text-[20px] font-bold text-[#17061E] outline-none ring-1 ring-[#17061E]/10 focus:ring-2 focus:ring-[#17061E]" />
-        ))}
-      </div>
-      <div className="mt-6 space-y-3">
-        <button disabled={!complete} onClick={onDone}
-          className="w-full rounded-full bg-[#17061E] px-5 py-4 text-[15px] font-semibold text-[#F5EFE6] disabled:opacity-40">
-          Verify &amp; continue
-        </button>
-        <button className="w-full text-center text-[12px] font-semibold text-[#17061E]/60 hover:text-[#17061E]">
-          Resend code
-        </button>
-      </div>
-    </>
-  );
-}
-
-/* ============================= ATTENTION STEP ============================ */
-function AttentionStep({ name, onDone }: { name: string; onDone: () => void }) {
-  type Slide = { eyebrow: string; title: React.ReactNode; body: string; image: string; blob: string };
-  const slides: Slide[] = [
-    { eyebrow: "Attention · Shore leave", title: (<>Stay safe,<br />{name.split(" ")[0]}.</>), body: "A quick briefing from AMET before you head out. Inform the warden, sign the Shore Leave Register and always carry your gate pass.", image: panel1.url, blob: "bg-[#F4C7C7]" },
-    { eyebrow: "Rules · Your wellbeing", title: (<>No sea, no wheels,<br />no shortcuts.</>), body: "Do not enter the sea or attempt to swim. No two-wheelers, driving, smoking, drinking or prohibited substances. Avoid outside food.", image: panel2.url, blob: "bg-[#C9DAB8]" },
-    { eyebrow: "Return · Gate protocol", title: (<>Back by 18:00.<br />Bags checked at gate.</>), body: "Return before curfew. Shopping bags are inspected at the gate. Late returns are logged — your dashboard opens automatically.", image: panel3.url, blob: "bg-[#D6C3F0]" },
-  ];
-  const TOTAL_MS = 10_000;
-  const perSlide = Math.floor(TOTAL_MS / slides.length);
-  const slideCount = slides.length;
-  const [index, setIndex] = useState(0);
-  const [remaining, setRemaining] = useState(Math.ceil(TOTAL_MS / 1000));
-
-  useEffect(() => {
-    const start = Date.now();
-    const tick = setInterval(() => {
-      const elapsed = Date.now() - start;
-      const left = Math.max(0, Math.ceil((TOTAL_MS - elapsed) / 1000));
-      setRemaining(left);
-      const nextIdx = Math.min(slideCount - 1, Math.floor(elapsed / perSlide));
-      setIndex(nextIdx);
-      if (elapsed >= TOTAL_MS) { clearInterval(tick); onDone(); }
-    }, 100);
-    return () => clearInterval(tick);
-  }, [onDone, perSlide, slideCount]);
-
-  const s = slides[index];
-  return (
-    <div className="relative min-h-screen overflow-hidden bg-[#F5EFE6] text-[#17061E]">
-      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-10 sm:max-w-lg">
-        <div className="flex items-center gap-2">
-          {slides.map((_, i) => (
-            <div key={i} className="relative h-[3px] flex-1 overflow-hidden rounded-full bg-[#17061E]/15">
-              <motion.div
-                key={`${i}-${index}`}
-                initial={{ width: i < index ? "100%" : "0%" }}
-                animate={{ width: i < index ? "100%" : i === index ? "100%" : "0%" }}
-                transition={{ duration: i === index ? perSlide / 1000 : 0, ease: "linear" }}
-                className="absolute inset-y-0 left-0 bg-[#17061E]"
-              />
-            </div>
-          ))}
-        </div>
-
-        <AnimatePresence mode="wait">
-          <motion.div key={`copy-${index}`} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.35 }} className="mt-10">
-            <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#17061E]/60">
-              <AlertCircle className="h-3 w-3" /> {s.eyebrow}
-            </div>
-            <h1 className="mt-4 text-[44px] font-extrabold leading-[0.95] tracking-tight sm:text-[52px]">{s.title}</h1>
-          </motion.div>
-        </AnimatePresence>
-
-        <div className="relative mt-8 flex flex-1 items-center justify-center">
-          <AnimatePresence mode="wait">
-            <motion.div key={`img-${index}`} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.98 }} transition={{ duration: 0.5, ease: [0.2, 0.8, 0.2, 1] }} className="relative w-full">
-              <div className={`relative mx-auto aspect-[4/5] w-full max-w-[420px] overflow-hidden rounded-[36px] ${s.blob}`}>
-                <img src={s.image} alt="" className="absolute inset-0 h-full w-full object-cover mix-blend-multiply" />
-              </div>
-            </motion.div>
-          </AnimatePresence>
-        </div>
-
-        <AnimatePresence mode="wait">
-          <motion.p key={`body-${index}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="mt-6 text-center text-[15px] leading-relaxed text-[#17061E]/70">
-            {s.body}
-          </motion.p>
-        </AnimatePresence>
-
-        <div className="mt-6 space-y-3">
-          <button onClick={onDone} className="w-full rounded-full bg-[#17061E] px-5 py-4 text-[15px] font-semibold text-[#F5EFE6] transition-transform hover:scale-[1.01] active:scale-[0.99]">
-            I understand
-          </button>
-          <button onClick={() => setIndex((i) => Math.min(slides.length - 1, i + 1))} className="w-full rounded-full border border-[#17061E]/25 bg-transparent px-5 py-4 text-[15px] font-semibold text-[#17061E] transition-colors hover:bg-[#17061E]/5">
-            {index < slides.length - 1 ? "Next" : "Skip"}
-          </button>
-          <div className="pt-1 text-center text-[11px] uppercase tracking-[0.2em] text-[#17061E]/50">
-            Auto-continuing in {remaining}s
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* =========================== NEW REQUEST FORM ============================ */
-const LEAVE_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
-const LEAVE_DOCUMENT_ALLOWED_TYPES = new Set(["application/pdf", "image/jpeg", "image/png"]);
-
+/* =========================== 3. APPLY VIEW =========================== */
 type LeaveDocumentPayload = {
   name: string;
   type: string;
@@ -1635,31 +1093,34 @@ type LeaveDocumentPayload = {
   dataUrl: string;
 };
 
-function readLeaveDocument(file: File): Promise<LeaveDocumentPayload> {
-  return new Promise((resolve, reject) => {
-    if (!LEAVE_DOCUMENT_ALLOWED_TYPES.has(file.type)) {
-      reject(new Error("Upload a PDF, JPG, JPEG, or PNG document."));
-      return;
-    }
-    if (file.size > LEAVE_DOCUMENT_MAX_BYTES) {
-      reject(new Error("Document must be 10 MB or smaller."));
-      return;
-    }
+async function readLeaveDocument(file: File): Promise<LeaveDocumentPayload> {
+  const allowed = ["application/pdf", "image/jpeg", "image/jpg", "image/png"];
+  if (!allowed.includes(file.type)) {
+    throw new Error("Invalid format. Please upload a PDF, JPG, or PNG document.");
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error("File exceeds 10 MB limit.");
+  }
+  const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Could not read the selected document."));
-    reader.onload = () => {
-      const dataUrl = typeof reader.result === "string" ? reader.result : "";
-      if (!dataUrl) {
-        reject(new Error("Could not read the selected document."));
-        return;
-      }
-      resolve({ name: file.name, type: file.type, size: file.size, dataUrl });
-    };
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Unable to read file"));
     reader.readAsDataURL(file);
   });
+  return { name: file.name, type: file.type, size: file.size, dataUrl };
 }
 
-function NewRequestForm({ cadetId }: { cadetId: string }) {
+function ApplyView({
+  cadetId,
+  leaveBlocked,
+  blockReason,
+  onSuccess,
+}: {
+  cadetId?: string;
+  leaveBlocked: boolean;
+  blockReason?: string;
+  onSuccess: () => void;
+}) {
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [destination, setDestination] = useState("");
@@ -1670,34 +1131,42 @@ function NewRequestForm({ cadetId }: { cadetId: string }) {
   const [selectedDocument, setSelectedDocument] = useState<LeaveDocumentPayload | null>(null);
   const [documentError, setDocumentError] = useState("");
   const [uploadProgress, setUploadProgress] = useState(0);
+
   const documentRequired = type === "Medical Leave";
-  const tokenRule = type === "Home Leave" || type === "Personal Leave"
-    ? "1 token / chargeable day"
-    : type === "Sunday Shore Leave"
+  const tokenRule =
+    type === "Home Leave" || type === "Personal Leave"
+      ? "1 token / chargeable day"
+      : type === "Sunday Shore Leave"
       ? "1 token / Sunday"
       : "0 tokens";
+
   const quoteQuery = useQuery({
     queryKey: ["cadet", "leave-token-quote", type, start, end],
     enabled: Boolean(start && end),
-    queryFn: () => apiRequest<{
-      calculation: { requiredTokens: number; message?: string };
-      balance: LeaveTokenBalance;
-      remainingAfterApproval: number;
-    }>(endpoints.cadet.leaveTokenQuote, {
-      method: "POST",
-      body: JSON.stringify({
-        leaveType: type,
-        fromDate: start,
-        toDate: end,
-        fromTime: start ? new Date(start).toTimeString().slice(0, 5) : "",
-        toTime: end ? new Date(end).toTimeString().slice(0, 5) : "",
+    queryFn: () =>
+      apiRequest<{
+        calculation: { requiredTokens: number; message?: string };
+        balance: LeaveTokenBalance;
+        remainingAfterApproval: number;
+      }>(endpoints.cadet.leaveTokenQuote, {
+        method: "POST",
+        body: JSON.stringify({
+          leaveType: type,
+          fromDate: start,
+          toDate: end,
+          fromTime: start ? new Date(start).toTimeString().slice(0, 5) : "",
+          toTime: end ? new Date(end).toTimeString().slice(0, 5) : "",
+        }),
       }),
-    }),
     retry: false,
   });
 
   const mut = useMutation({
     mutationFn: async () => {
+      if (!cadetId) throw new Error("No cadet profile linked");
+      if (leaveBlocked) {
+        throw new Error(blockReason || "Your leave privileges are currently suspended.");
+      }
       if (documentRequired && !selectedDocument) {
         throw new Error(`${type} leave requires a supporting document.`);
       }
@@ -1721,18 +1190,14 @@ function NewRequestForm({ cadetId }: { cadetId: string }) {
       setUploadProgress(selectedDocument ? 100 : 0);
     },
     onSuccess: () => {
-      toast.success("Leave request submitted");
-      setDestination(""); setStart(""); setEnd(""); setReason("");
-      setSelectedDocument(null);
-      setDocumentError("");
-      setUploadProgress(0);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      toast.success("Leave request submitted successfully");
       qc.invalidateQueries({ queryKey: queryKeys.cadet.leaveRequests(cadetId) });
       qc.invalidateQueries({ queryKey: ["cadet", "leave-token-quote"] });
+      onSuccess();
     },
     onError: (error: unknown) => {
       setUploadProgress(0);
-      toast.error(getErrorMessage(error, "Failed to submit"));
+      toast.error(getErrorMessage(error, "Failed to submit leave request"));
     },
   });
 
@@ -1758,109 +1223,766 @@ function NewRequestForm({ cadetId }: { cadetId: string }) {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); mut.mutate(); }} className="rounded-[28px] bg-white p-5 ring-1 ring-[#17061E]/8">
-      <div className="flex items-center justify-between">
-        <h2 className="text-[15px] font-bold">Apply for leave</h2>
-        <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#17061E]/55"><Coins className="h-3 w-3" /> {tokenRule}</div>
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-[24px] bg-[#F5EFE6] p-1">
-        {(["Home Leave", "Medical Leave", "Emergency Leave", "Personal Leave", "Sunday Shore Leave"] as const).map(t => (
-          <button type="button" key={t} onClick={() => setType(t)}
-            className={`rounded-[18px] px-3 py-2 text-[11px] font-semibold transition ${type === t ? "bg-[#17061E] text-[#F5EFE6]" : "text-[#17061E]/60"}`}>
-            {t}
-          </button>
-        ))}
-      </div>
-      <div className="mt-3 space-y-3">
-        <KField label="Destination" value={destination} onChange={setDestination} required />
-        <KField label="Reason" value={reason} onChange={setReason} />
-        <div className="grid grid-cols-2 gap-3">
-          <KField label="Start" value={start} onChange={setStart} required type="datetime-local" />
-          <KField label="End" value={end} onChange={setEnd} required type="datetime-local" />
-        </div>
-        <div className="rounded-[24px] bg-[#F5EFE6] p-4">
-          <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#17061E]/55">Token calculation</div>
-          {quoteQuery.isError ? (
-            <div className="mt-2 rounded-2xl bg-[#F2A488]/40 p-3 text-[12px] font-semibold text-[#17061E]">
-              {getErrorMessage(quoteQuery.error, "Token calculation is unavailable.")}
-            </div>
-          ) : quoteQuery.data ? (
-            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-              <TokenQuoteStat label="Required" value={quoteQuery.data.calculation.requiredTokens} />
-              <TokenQuoteStat label="Available" value={quoteQuery.data.balance.available ?? 0} />
-              <TokenQuoteStat label="Remaining" value={quoteQuery.data.remainingAfterApproval} />
-            </div>
-          ) : (
-            <p className="mt-2 text-[12px] font-medium text-[#17061E]/55">Select dates to see the authoritative backend token calculation.</p>
-          )}
-          {type === "Sunday Shore Leave" && (
-            <p className="mt-3 rounded-2xl bg-white px-3 py-2 text-[12px] font-semibold text-[#17061E]/70">
-              Sunday Shore Leave is available only on Sundays.
-            </p>
-          )}
-        </div>
-        <div className="rounded-[24px] bg-[#F5EFE6] p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#17061E]/55">
-                Supporting document {documentRequired ? <span className="text-[#C05B4D]">required</span> : <span className="text-[#17061E]/40">optional</span>}
-              </div>
-              <div className="mt-1 text-[12px] font-medium text-[#17061E]/60">PDF, JPG, JPEG, or PNG up to 10 MB.</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="shrink-0 rounded-full bg-white px-3 py-2 text-[11px] font-bold text-[#17061E] ring-1 ring-[#17061E]/10"
-            >
-              {selectedDocument ? "Replace" : "Upload"}
-            </button>
+  if (leaveBlocked) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <ShoreCard variant="default" padding="xl" className="text-center">
+          <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-rose-50 text-rose-600">
+            <Lock className="h-8 w-8" />
           </div>
-          <input ref={fileInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={handleDocumentChange} className="hidden" />
-          {documentError && <div className="mt-3 rounded-2xl bg-[#F2A488]/40 p-3 text-[12px] font-semibold text-[#17061E]">{documentError}</div>}
-          {selectedDocument && (
-            <div className="mt-3 rounded-2xl bg-white p-3 ring-1 ring-[#17061E]/8">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-[13px] font-bold text-[#17061E]">{selectedDocument.name}</div>
-                  <div className="text-[11px] text-[#17061E]/55">{selectedDocument.type} · {(selectedDocument.size / 1024 / 1024).toFixed(2)} MB</div>
+          <h2 className="text-2xl font-extrabold text-slate-900">Leave Applications Disabled</h2>
+          <p className="mt-2 text-sm text-slate-500 leading-relaxed">
+            Your leave privileges are currently suspended. Reason: {blockReason || "Administrative Hold"}. Please contact the duty officer.
+          </p>
+        </ShoreCard>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <ShorePageHeader
+        title="Apply for Leave"
+        subtitle="Submit your leave application for faculty & duty officer review"
+      />
+
+      <ShoreCard variant="default" padding="lg">
+        <form onSubmit={(e) => { e.preventDefault(); mut.mutate(); }} className="space-y-6">
+          {/* Leave Type Selector */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                Leave Type
+              </label>
+              <span className="text-xs font-semibold text-[#0077f6]">
+                {tokenRule}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {(["Home Leave", "Medical Leave", "Emergency Leave", "Personal Leave", "Sunday Shore Leave"] as const).map((t) => (
+                <button
+                  type="button"
+                  key={t}
+                  onClick={() => setType(t)}
+                  className={`rounded-2xl px-4 py-3 text-xs font-bold transition-all text-center ${
+                    type === t
+                      ? "bg-[#0077f6] text-white shadow-md shadow-blue-500/25"
+                      : "bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200/60"
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Dates */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <ShoreInput
+              label="Start Date & Time"
+              type="datetime-local"
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+              required
+            />
+            <ShoreInput
+              label="End Date & Time"
+              type="datetime-local"
+              value={end}
+              onChange={(e) => setEnd(e.target.value)}
+              required
+            />
+          </div>
+
+          {/* Destination */}
+          <ShoreInput
+            label="Destination"
+            placeholder="e.g. Bangalore, Chennai, Home Address"
+            value={destination}
+            onChange={(e) => setDestination(e.target.value)}
+            required
+            icon={<MapPin className="h-4 w-4" />}
+          />
+
+          {/* Reason */}
+          <ShoreInput
+            label="Reason for Leave"
+            placeholder="Provide details about your purpose of travel"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            required
+          />
+
+          {/* Token Quote calculation */}
+          <div className="rounded-2xl bg-blue-50/60 border border-blue-100 p-4">
+            <div className="text-xs font-bold uppercase tracking-wider text-[#0077f6]">
+              Token Requirement
+            </div>
+            {quoteQuery.isError ? (
+              <p className="mt-1 text-xs text-rose-600 font-medium">
+                {getErrorMessage(quoteQuery.error, "Token calculation unavailable.")}
+              </p>
+            ) : quoteQuery.data ? (
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl bg-white p-2 shadow-sm">
+                  <div className="text-lg font-extrabold text-slate-900">{quoteQuery.data.calculation.requiredTokens}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Required</div>
                 </div>
-                <button type="button" onClick={removeDocument} className="grid h-8 w-8 place-items-center rounded-full bg-[#F5EFE6] text-[#17061E]" aria-label="Remove supporting document">
-                  <X className="h-4 w-4" />
+                <div className="rounded-xl bg-white p-2 shadow-sm">
+                  <div className="text-lg font-extrabold text-emerald-600">{quoteQuery.data.balance.available ?? 0}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Available</div>
+                </div>
+                <div className="rounded-xl bg-white p-2 shadow-sm">
+                  <div className="text-lg font-extrabold text-[#0077f6]">{quoteQuery.data.remainingAfterApproval}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Remaining</div>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-slate-500">
+                Select start and end dates to preview token usage.
+              </p>
+            )}
+          </div>
+
+          {/* Supporting Documents */}
+          <div className="rounded-2xl bg-slate-50 border border-slate-200/80 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  Supporting Document {documentRequired && <span className="text-rose-600">(Required)</span>}
+                </span>
+                <p className="text-xs text-slate-500 mt-0.5">PDF or image up to 10 MB</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="rounded-full bg-white px-4 py-1.5 text-xs font-bold text-slate-900 border border-slate-200 shadow-sm hover:bg-slate-50"
+              >
+                {selectedDocument ? "Replace" : "Upload"}
+              </button>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png"
+              onChange={handleDocumentChange}
+              className="hidden"
+            />
+            {documentError && <p className="mt-2 text-xs font-bold text-rose-600">{documentError}</p>}
+            {selectedDocument && (
+              <div className="mt-3 flex items-center justify-between rounded-xl bg-white p-3 border border-slate-200">
+                <span className="text-xs font-bold text-slate-800 truncate max-w-[200px]">
+                  {selectedDocument.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={removeDocument}
+                  className="text-xs font-bold text-rose-500 hover:text-rose-700"
+                >
+                  Remove
                 </button>
               </div>
-              {selectedDocument.type.startsWith("image/") ? (
-                <img src={selectedDocument.dataUrl} alt="Selected document preview" className="mt-3 max-h-40 w-full rounded-2xl object-cover" />
-              ) : (
-                <a href={selectedDocument.dataUrl} target="_blank" rel="noreferrer" className="mt-3 block rounded-2xl border border-[#17061E]/10 bg-[#F5EFE6] p-3 text-center text-[12px] font-bold text-[#17061E]">
-                  Preview PDF
-                </a>
-              )}
-              {uploadProgress > 0 && (
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#17061E]/10">
-                  <div className="h-full rounded-full bg-[#F5D76E] transition-all" style={{ width: `${uploadProgress}%` }} />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-      <button type="submit" disabled={mut.isPending}
-        className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#17061E] px-5 py-3.5 text-[14px] font-semibold text-[#F5EFE6] disabled:opacity-60">
-        {mut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}
-        Submit request
-      </button>
-    </form>
+            )}
+          </div>
+
+          {/* Submit Button */}
+          <ShoreButton
+            variant="primary"
+            size="xl"
+            fullWidth
+            loading={mut.isPending}
+            type="submit"
+          >
+            Submit Leave Application
+          </ShoreButton>
+        </form>
+      </ShoreCard>
+    </div>
   );
 }
 
+/* =========================== 4. DIGITAL PASS VIEW =========================== */
+function PassView({
+  cadet,
+  leave,
+  onDownloadGatePass,
+  onSendGatePassEmail,
+  gateEmailBusy,
+  onApply,
+}: {
+  cadet?: Cadet;
+  leave?: LeaveRequest;
+  onDownloadGatePass: (leave?: LeaveRequest) => void;
+  onSendGatePassEmail: (leave?: LeaveRequest) => void;
+  gateEmailBusy: boolean;
+  onApply: () => void;
+}) {
+  if (!leave) {
+    return (
+      <div className="max-w-2xl mx-auto space-y-6">
+        <ShorePageHeader
+          title="Digital Gate Pass"
+          subtitle="Official campus exit pass with verification code"
+        />
+        <ShoreEmptyState
+          icon={<QrCode className="h-10 w-10 text-[#0077f6]" />}
+          title="No Active Gate Pass"
+          description="You do not have an approved leave pass ready for checkout. Once your leave is approved by the HOD, your digital pass will appear here."
+          actionLabel="Apply for Leave"
+          onAction={onApply}
+        />
+      </div>
+    );
+  }
+
+  const startStr = new Date(leave.start_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  const endStr = new Date(leave.end_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  const passId = `AMET-PASS-${String(leave.id).slice(0, 8).toUpperCase()}`;
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <ShorePageHeader
+        title="Digital Gate Pass"
+        subtitle="Official AMET movement pass and QR credential"
+      />
+
+      {/* Main Digital Pass Card */}
+      <ShoreCard
+        variant="default"
+        padding="xl"
+        className="relative overflow-hidden border-2 border-[#0077f6]/20 shadow-xl"
+      >
+        {/* Pass Top Branding */}
+        <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+          <div>
+            <div className="text-xs font-extrabold uppercase tracking-widest text-[#0077f6]">
+              AMET UNIVERSITY
+            </div>
+            <div className="text-lg font-extrabold text-slate-900">
+              OFFICIAL SHORE PASS
+            </div>
+          </div>
+          <ShoreStatusBadge status={leave.status} />
+        </div>
+
+        {/* QR Code Presentation */}
+        <div className="my-6 flex flex-col items-center justify-center p-6 bg-slate-50/70 rounded-3xl border border-slate-100">
+          <div className="grid h-44 w-44 place-items-center rounded-2xl bg-white p-3 shadow-md border border-slate-200">
+            <QrCode className="h-36 w-36 text-slate-900" />
+          </div>
+          <div className="mt-3 font-mono text-sm font-extrabold text-slate-800 tracking-wider">
+            {passId}
+          </div>
+          <div className="mt-1 text-xs text-slate-500 font-medium">
+            Scan at AMET main gate biometric terminal
+          </div>
+        </div>
+
+        {/* Pass Details */}
+        <div className="grid grid-cols-2 gap-4 text-left border-t border-slate-100 pt-4">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Cadet Name</span>
+            <div className="text-sm font-bold text-slate-900">{cadet?.full_name || "Cadet"}</div>
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Roll / Reg Number</span>
+            <div className="text-sm font-bold text-slate-900">{cadet?.cadet_code || "—"}</div>
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Leave Type</span>
+            <div className="text-sm font-bold text-slate-900">{leave.reason || "Shore Leave"}</div>
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Destination</span>
+            <div className="text-sm font-bold text-slate-900">{leave.destination}</div>
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Departure</span>
+            <div className="text-sm font-semibold text-slate-800">{startStr}</div>
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Valid Return Until</span>
+            <div className="text-sm font-semibold text-slate-800">{endStr}</div>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4 border-t border-slate-100">
+          <ShoreButton
+            variant="primary"
+            size="lg"
+            icon={<Download className="h-4 w-4" />}
+            onClick={() => onDownloadGatePass(leave)}
+          >
+            Download Pass PDF
+          </ShoreButton>
+          <ShoreButton
+            variant="secondary"
+            size="lg"
+            loading={gateEmailBusy}
+            icon={<Mail className="h-4 w-4" />}
+            onClick={() => onSendGatePassEmail(leave)}
+          >
+            Send to Registered Email
+          </ShoreButton>
+        </div>
+      </ShoreCard>
+    </div>
+  );
+}
+
+/* =========================== 5. PROFILE VIEW =========================== */
+function ProfileView({
+  name,
+  rollNo,
+  department,
+  cadet,
+  requests,
+  onFaceEnroll,
+  onEditProfile,
+  onSignOut,
+  onDeleteAccount,
+  onNavigateToRewards,
+  onNavigateToRanks,
+}: {
+  name: string;
+  rollNo: string;
+  department: string;
+  cadet?: Cadet;
+  requests: LeaveRequest[];
+  onFaceEnroll: () => void;
+  onEditProfile: () => void;
+  onSignOut: () => void;
+  onDeleteAccount: () => void;
+  onNavigateToRewards: () => void;
+  onNavigateToRanks: () => void;
+}) {
+  const initials = name.split(" ").map((s) => s[0]).join("").slice(0, 2).toUpperCase() || "C";
+  const faceEnrolled = !!cadet?.face_enrolled;
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <ShorePageHeader
+        title="Cadet Profile"
+        subtitle="Manage your identity, security and academy preferences"
+      />
+
+      {/* Main Identity Card */}
+      <ShoreCard variant="default" padding="lg">
+        <div className="flex items-center gap-5">
+          <div className="grid h-20 w-20 shrink-0 place-items-center rounded-3xl bg-[#0077f6] text-2xl font-extrabold text-white shadow-md">
+            {initials}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-xl font-extrabold text-slate-900 truncate">{name}</h3>
+            <p className="text-xs font-bold uppercase tracking-wider text-[#0077f6] mt-0.5">
+              Roll No · {rollNo}
+            </p>
+            <p className="text-xs font-medium text-slate-500 mt-0.5">{department}</p>
+            {cadet?.email && (
+              <p className="text-xs text-slate-400 mt-1 truncate">{cadet.email}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onEditProfile}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors"
+            title="Edit details"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+        </div>
+      </ShoreCard>
+
+      {/* Stats Summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <ShoreStatCard
+          label="Total Leaves"
+          value={requests.length}
+          tone="blue"
+        />
+        <ShoreStatCard
+          label="Leave Tokens"
+          value={cadet?.leave_tokens ?? 23}
+          tone="emerald"
+        />
+        <ShoreStatCard
+          label="Compliance"
+          value="98%"
+          tone="blue"
+        />
+      </div>
+
+      {/* Biometric Status Card */}
+      <ShoreCard variant="default" padding="md">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`grid h-11 w-11 place-items-center rounded-2xl ${faceEnrolled ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"}`}>
+              <ScanFace className="h-6 w-6" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-900">Face Verification</div>
+              <div className="text-xs text-slate-500">
+                {faceEnrolled ? "Biometric enrolled & active" : "Enrollment required for automated gate"}
+              </div>
+            </div>
+          </div>
+          <ShoreStatusBadge status={faceEnrolled ? "approved" : "pending"} size="sm" />
+        </div>
+      </ShoreCard>
+
+      {/* Gamification shortcuts (Rewards & Leaderboard) */}
+      <div className="grid grid-cols-2 gap-3">
+        <button
+          type="button"
+          onClick={onNavigateToRewards}
+          className="flex items-center justify-between rounded-3xl bg-white p-5 border border-slate-100 shadow-sm hover:shadow-md transition-all text-left"
+        >
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-amber-50 text-amber-600">
+              <Gift className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-900">Rewards & Loot</div>
+              <div className="text-[11px] text-slate-500">Open crates</div>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-400" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onNavigateToRanks}
+          className="flex items-center justify-between rounded-3xl bg-white p-5 border border-slate-100 shadow-sm hover:shadow-md transition-all text-left"
+        >
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-blue-50 text-[#0077f6]">
+              <Trophy className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-900">Leaderboard</div>
+              <div className="text-[11px] text-slate-500">Rank #4 this month</div>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-400" />
+        </button>
+      </div>
+
+      {/* Security Actions */}
+      <div className="space-y-3 pt-2">
+        <ShoreButton variant="secondary" size="lg" fullWidth onClick={onSignOut}>
+          <LogOut className="h-4 w-4" /> Sign Out
+        </ShoreButton>
+        <button
+          type="button"
+          onClick={onDeleteAccount}
+          className="w-full text-center text-xs font-semibold text-rose-600 hover:underline py-2"
+        >
+          Delete cadet account data
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== REWARDS VIEW =========================== */
+function RewardsView({ onBack }: { onBack: () => void }) {
+  const [opening, setOpening] = useState(false);
+  const [revealed, setRevealed] = useState<null | { tier: string; prize: string }>(null);
+
+  function openCrate() {
+    setOpening(true); setRevealed(null);
+    setTimeout(() => { setOpening(false); setRevealed({ tier: "Epic", prize: "Movie pass · 2 tickets" }); }, 1600);
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <div className="flex items-center gap-2">
+        <button onClick={onBack} className="text-xs font-bold text-[#0077f6] hover:underline flex items-center gap-1">
+          ← Back to Profile
+        </button>
+      </div>
+      <ShorePageHeader title="Rewards & Loot" subtitle="Open monthly loot crates earned through high compliance" />
+      <ShoreCard variant="default" padding="xl" className="text-center">
+        <div className="mx-auto mb-4 grid h-24 w-24 place-items-center rounded-3xl bg-blue-50 text-[#0077f6]">
+          <Package className="h-12 w-12" />
+        </div>
+        <h3 className="text-xl font-bold text-slate-900">Monthly Cadet Crate</h3>
+        <p className="mt-1 text-sm text-slate-500">Available based on on-time gate return streak</p>
+        <div className="mt-6 flex justify-center">
+          <ShoreButton variant="primary" size="lg" loading={opening} onClick={openCrate}>
+            {opening ? "Opening crate…" : "Open Crate"}
+          </ShoreButton>
+        </div>
+        {revealed && (
+          <div className="mt-4 rounded-2xl bg-emerald-50 p-4 border border-emerald-200 text-emerald-800">
+            <span className="text-xs font-bold uppercase">{revealed.tier} Reward</span>
+            <div className="text-lg font-extrabold">{revealed.prize}</div>
+            <p className="text-xs mt-1">Collect from the campus administration office.</p>
+          </div>
+        )}
+      </ShoreCard>
+    </div>
+  );
+}
+
+/* =========================== RANKS VIEW =========================== */
+function RanksView({ name, onBack }: { name: string; onBack: () => void }) {
+  const board = [
+    { rank: 1, name: "Arjun M.", xp: 1820 },
+    { rank: 2, name: "Vikram S.", xp: 1740 },
+    { rank: 3, name: "Rohit K.", xp: 1685 },
+    { rank: 4, name, xp: 1620, me: true },
+    { rank: 5, name: "Sahil P.", xp: 1590 },
+    { rank: 6, name: "Karan D.", xp: 1530 },
+  ];
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <div className="flex items-center gap-2">
+        <button onClick={onBack} className="text-xs font-bold text-[#0077f6] hover:underline flex items-center gap-1">
+          ← Back to Profile
+        </button>
+      </div>
+      <ShorePageHeader title="Cadet Leaderboard" subtitle="AMET monthly punctuality and movement compliance rank" />
+      <ShoreCard variant="default" padding="none" className="overflow-hidden">
+        <div className="divide-y divide-slate-100">
+          {board.map((item) => (
+            <div
+              key={item.rank}
+              className={`flex items-center justify-between px-6 py-4 ${
+                item.me ? "bg-blue-50/70" : "bg-white"
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <span className={`grid h-8 w-8 place-items-center rounded-full text-xs font-extrabold ${
+                  item.rank === 1 ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-700"
+                }`}>
+                  {item.rank}
+                </span>
+                <span className="text-sm font-bold text-slate-900">
+                  {item.name} {item.me && "(You)"}
+                </span>
+              </div>
+              <span className="text-sm font-extrabold text-[#0077f6]">
+                {item.xp} pts
+              </span>
+            </div>
+          ))}
+        </div>
+      </ShoreCard>
+    </div>
+  );
+}
+
+/* =========================== SHORE LEAVE QUICK DRAWER =========================== */
+function ShoreLeaveDrawer({
+  open,
+  onOpenChange,
+  cadetId,
+  leaveBlocked,
+  blockReason,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  cadetId?: string;
+  leaveBlocked: boolean;
+  blockReason?: string;
+}) {
+  const [destination, setDestination] = useState("");
+  const [reason, setReason] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const qc = useQueryClient();
+
+  const mut = useMutation({
+    mutationFn: async () => {
+      if (!cadetId) throw new Error("No cadet profile linked");
+      if (leaveBlocked) {
+        throw new Error(blockReason || "Your leave privileges are currently suspended.");
+      }
+      await apiRequest<MutationResult>(endpoints.cadet.shoreLeaveRequest, {
+        method: "POST",
+        body: JSON.stringify({ destination, reason: reason || "Shore leave" }),
+      });
+    },
+    onSuccess: () => {
+      setSubmitted(true);
+      qc.invalidateQueries({ queryKey: queryKeys.cadet.leaveRequests(cadetId) });
+      setTimeout(() => {
+        onOpenChange(false);
+        setSubmitted(false);
+        setDestination("");
+        setReason("");
+      }, 1800);
+    },
+    onError: (error: unknown) => toast.error(getErrorMessage(error, "Failed to submit request")),
+  });
+
+  return (
+    <ShoreModal
+      open={open}
+      onClose={() => onOpenChange(false)}
+      title="Quick Shore Leave"
+      subtitle="Standard same-day campus exit pass (Return by 18:00)"
+    >
+      {leaveBlocked ? (
+        <div className="rounded-2xl bg-rose-50 p-4 border border-rose-200 text-rose-800 text-sm">
+          Leave suspended. Reason: {blockReason || "Administrative Hold"}.
+        </div>
+      ) : !submitted ? (
+        <form onSubmit={(e) => { e.preventDefault(); mut.mutate(); }} className="space-y-4">
+          <ShoreInput
+            label="Destination"
+            placeholder="e.g. Marina Mall, Beach, ECR"
+            value={destination}
+            onChange={(e) => setDestination(e.target.value)}
+            required
+          />
+          <ShoreInput
+            label="Reason"
+            placeholder="Purpose of leave"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <div className="grid grid-cols-2 gap-3 rounded-2xl bg-slate-50 p-3 border border-slate-100 text-center">
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500">Departure</div>
+              <div className="text-sm font-bold text-slate-900 mt-0.5">Now</div>
+            </div>
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500">Return Deadline</div>
+              <div className="text-sm font-bold text-slate-900 mt-0.5">18:00 IST</div>
+            </div>
+          </div>
+          <div className="pt-2">
+            <ShoreButton variant="primary" size="lg" fullWidth loading={mut.isPending} type="submit">
+              Generate Shore Pass
+            </ShoreButton>
+          </div>
+        </form>
+      ) : (
+        <div className="py-6 text-center">
+          <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-3xl bg-emerald-50 text-emerald-600">
+            <CheckCircle2 className="h-8 w-8" />
+          </div>
+          <h4 className="text-lg font-extrabold text-slate-900">Pass Generated!</h4>
+          <p className="text-xs text-slate-500 mt-1">Your shore leave pass is ready on your dashboard.</p>
+        </div>
+      )}
+    </ShoreModal>
+  );
+}
+
+/* =========================== NOTIFICATIONS MODAL =========================== */
+function NotificationsSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.cadet.notifications,
+    queryFn: () => apiRequest<NotificationPage>(endpoints.notifications.list("?limit=50")),
+    enabled: open,
+  });
+
+  const markAll = useMutation({
+    mutationFn: () => apiRequest(endpoints.notifications.markAllRead, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.cadet.notifications }),
+  });
+
+  const items = data?.notifications ?? [];
+
+  return (
+    <ShoreModal
+      open={open}
+      onClose={() => onOpenChange(false)}
+      title="Notifications"
+      subtitle="Latest updates regarding your leave and gate passes"
+    >
+      <div className="space-y-3">
+        {items.length > 0 && (
+          <div className="flex justify-end">
+            <button
+              onClick={() => markAll.mutate()}
+              className="text-xs font-bold text-[#0077f6] hover:underline"
+            >
+              Mark all as read
+            </button>
+          </div>
+        )}
+        {isLoading ? (
+          <p className="py-8 text-center text-xs text-slate-500">Loading notifications…</p>
+        ) : items.length === 0 ? (
+          <p className="py-8 text-center text-xs text-slate-500">No notifications yet.</p>
+        ) : (
+          <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+            {items.map((n) => (
+              <div
+                key={n.notificationId}
+                className={`p-3.5 rounded-2xl border transition-colors ${
+                  n.read ? "bg-white border-slate-100" : "bg-blue-50/60 border-blue-200"
+                }`}
+              >
+                <div className="text-xs font-bold text-slate-900">{n.title}</div>
+                <div className="text-xs text-slate-600 mt-0.5 leading-relaxed">{n.message}</div>
+                <div className="text-[10px] text-slate-400 mt-1.5 font-medium">
+                  {new Date(n.createdAt).toLocaleString()}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </ShoreModal>
+  );
+}
+
+/* =========================== ONBOARDING =========================== */
+function Onboarding({ step, setStep, name }: { step: OnboardStep; setStep: (s: OnboardStep) => void; name: string }) {
+  if (step === "attention") return <AttentionStep name={name} onDone={() => setStep("done")} />;
+
+  return (
+    <div className="relative grid min-h-screen place-items-center bg-[#f0f7ff] px-6 text-slate-900">
+      <ShoreCard variant="default" padding="xl" className="w-full max-w-md text-center">
+        <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-blue-50 text-[#0077f6]">
+          <Sparkles className="h-8 w-8" />
+        </div>
+        <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900">
+          Welcome, {name.split(" ")[0]}!
+        </h1>
+        <p className="mt-2 text-sm text-slate-500 leading-relaxed">
+          Welcome to the AMET ShoreLeave Cadet Portal. Review leave status, manage your token wallet, and verify gate passes.
+        </p>
+        <div className="mt-6">
+          <ShoreButton variant="primary" size="lg" fullWidth onClick={() => setStep("done")}>
+            Get Started
+          </ShoreButton>
+        </div>
+      </ShoreCard>
+    </div>
+  );
+}
+
+function AttentionStep({ name, onDone }: { name: string; onDone: () => void }) {
+  return (
+    <div className="grid min-h-screen place-items-center bg-[#f0f7ff] px-4">
+      <ShoreCard variant="default" padding="xl" className="w-full max-w-md text-center">
+        <h2 className="text-xl font-extrabold text-slate-900">Notice for {name}</h2>
+        <p className="mt-2 text-xs text-slate-500">
+          Please adhere to academy shore leave return policies and curfew times.
+        </p>
+        <div className="mt-5">
+          <ShoreButton variant="primary" size="md" fullWidth onClick={onDone}>
+            I Understand
+          </ShoreButton>
+        </div>
+      </ShoreCard>
+    </div>
+  );
+}
+
+/* =========================== FACE LOGIN VERIFICATION =========================== */
 type CameraStatus = "idle" | "requesting" | "ready" | "denied" | "unavailable" | "error";
 type VerificationLocation = { latitude: number; longitude: number; accuracy?: number };
 type VerificationStatus = "waiting" | "ready" | "submitting" | "failed";
-type VerificationState = {
-  status: VerificationStatus;
-  guidance: string;
-};
+type VerificationState = { status: VerificationStatus; guidance: string };
 
 const defaultVerificationState: VerificationState = {
   status: "waiting",
@@ -1869,9 +1991,9 @@ const defaultVerificationState: VerificationState = {
 
 const FACE_VERIFICATION_TIPS = [
   "Face the camera directly",
-  "Keep your face inside the rectangle",
+  "Keep your face inside the circle",
   "Ensure good lighting",
-  "Remove glasses if necessary",
+  "Remove sunglasses",
   "Hold still",
 ];
 
@@ -1953,7 +2075,7 @@ function FaceLoginVerification({ onVerified, onCancel }: { onVerified: (token: s
       }
       setVerification({
         status: "ready",
-        guidance: "Camera ready. Look at the camera and press Capture & Verify.",
+        guidance: "Camera ready. Align your face and press Capture & Verify.",
       });
       setBackendMessage("");
       setCameraStatus("ready");
@@ -1993,7 +2115,7 @@ function FaceLoginVerification({ onVerified, onCancel }: { onVerified: (token: s
     try {
       setBusy(true);
       setBackendMessage("");
-      setVerification({ status: "submitting", guidance: "Sending face frame to InsightFace…" });
+      setVerification({ status: "submitting", guidance: "Verifying biometrics with InsightFace…" });
       const tempToken = TokenService.getCadetFaceToken();
       if (!tempToken) throw new Error("Face verification session expired. Please sign in again.");
       const location = await requestVerificationLocation();
@@ -2024,101 +2146,59 @@ function FaceLoginVerification({ onVerified, onCancel }: { onVerified: (token: s
     onCancel();
   }
 
-  const showCameraPermissionDialog = !!cameraError && cameraStatus !== "ready";
-
   return (
-    <div
-      className="fixed inset-0 z-[9999] h-[100dvh] w-[100dvw] overflow-hidden bg-black text-white"
-      style={{
-        paddingTop: "env(safe-area-inset-top)",
-        paddingRight: "env(safe-area-inset-right)",
-        paddingBottom: "env(safe-area-inset-bottom)",
-        paddingLeft: "env(safe-area-inset-left)",
-      }}
-    >
-      <video ref={videoRef} muted playsInline className="absolute inset-0 h-full w-full object-cover" />
-      <div className="absolute inset-0 bg-black/45" />
-      <div className="pointer-events-none absolute inset-0 bg-black/20" />
+    <div className="fixed inset-0 z-[9999] h-[100dvh] w-[100dvw] overflow-hidden bg-slate-950 text-white flex flex-col justify-between p-6">
+      <video ref={videoRef} muted playsInline className="absolute inset-0 h-full w-full object-cover opacity-60" />
 
-      <button
-        type="button"
-        onClick={cancelFaceVerification}
-        className="absolute z-20 grid h-12 w-12 place-items-center rounded-full bg-white/15 text-white shadow-2xl ring-1 ring-white/30 backdrop-blur transition hover:bg-white/25"
-        style={{ top: "max(1rem, env(safe-area-inset-top))", right: "max(1rem, env(safe-area-inset-right))" }}
-        aria-label="Cancel face verification"
-      >
-        <X className="h-6 w-6" />
-      </button>
-
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[min(58dvh,72vw,520px)] min-h-[180px] w-[min(42dvh,78vw,420px)] min-w-[180px] max-w-[calc(100dvw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-[28px] border-[3px] border-white/95 shadow-[0_0_70px_rgba(255,255,255,0.18),inset_0_0_40px_rgba(255,255,255,0.08)]" />
-
-      <div className="absolute inset-x-0 top-0 z-10 px-5 text-center sm:px-6" style={{ paddingTop: "max(2rem, calc(env(safe-area-inset-top) + 1rem))" }}>
-        <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} className="mx-auto max-w-xl">
-          <div className="mx-auto mb-4 inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] ring-1 ring-white/25 backdrop-blur">
-            <ScanFace className="h-4 w-4" /> Secure check
-          </div>
-          <h1 className="text-[clamp(2rem,9vw,3.75rem)] font-black tracking-tight">Face Verification</h1>
-          <p className="mt-3 text-[clamp(0.95rem,3vw,1.125rem)] font-medium text-white/80">Look at the camera to continue</p>
-        </motion.div>
+      {/* Top Header */}
+      <div className="relative z-10 flex items-center justify-between">
+        <div>
+          <span className="text-xs font-bold uppercase tracking-widest text-[#38bdf8]">
+            AMET IST
+          </span>
+          <h2 className="text-xl font-black">Face Verification</h2>
+        </div>
+        <button
+          onClick={cancelFaceVerification}
+          className="grid h-10 w-10 place-items-center rounded-full bg-white/20 backdrop-blur text-white hover:bg-white/30"
+        >
+          <X className="h-5 w-5" />
+        </button>
       </div>
 
-      {showCameraPermissionDialog && (
-        <div className="absolute inset-0 z-30 grid place-items-center bg-black/55 px-4 backdrop-blur-sm">
-          <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            className="w-full max-w-md rounded-[28px] bg-white p-5 text-[#17061E] shadow-2xl"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="cadet-camera-dialog-title"
-          >
-            <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#17061E] text-white">
-              <Camera className="h-5 w-5" />
-            </div>
-            <h2 id="cadet-camera-dialog-title" className="mt-4 text-center text-xl font-black">Camera access is required</h2>
-            <p className="mt-2 text-center text-sm text-[#17061E]/70">{cameraError}</p>
-            <p className="mt-3 rounded-2xl bg-[#17061E]/5 p-3 text-xs text-[#17061E]/65">
-              If your browser blocked the prompt, open site settings for this page, set Camera to Allow, then return and retry.
-            </p>
-            <div className="mt-5 grid gap-2 sm:grid-cols-2">
-              <button type="button" onClick={startCamera} disabled={cameraStatus === "requesting"} className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-full bg-[#17061E] px-5 py-3 text-sm font-extrabold text-white disabled:opacity-60">
-                {cameraStatus === "requesting" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
-                Allow Camera Again
-              </button>
-              <button type="button" onClick={cancelFaceVerification} className="inline-flex min-h-[48px] items-center justify-center rounded-full border border-[#17061E]/15 px-5 py-3 text-sm font-bold text-[#17061E]">
-                Cancel
-              </button>
-            </div>
-          </motion.div>
+      {/* Face Frame Oval */}
+      <div className="relative z-10 mx-auto h-72 w-56 rounded-full border-4 border-dashed border-sky-400/80 shadow-[0_0_50px_rgba(56,189,248,0.3)] flex items-center justify-center" />
+
+      {/* Guidance and Action Button */}
+      <div className="relative z-10 max-w-md mx-auto w-full space-y-4">
+        <div className="rounded-2xl bg-slate-900/80 p-3 text-center backdrop-blur border border-slate-700">
+          <p className="text-xs text-slate-300 font-medium">
+            {busy ? "Verifying biometrics…" : cameraStatus === "ready" ? FACE_VERIFICATION_TIPS[tipIndex] : verification.guidance}
+          </p>
         </div>
-      )}
 
-      <div className="absolute inset-x-0 bottom-0 z-10 px-5 sm:px-8" style={{ paddingBottom: "max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem))" }}>
-        <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} className="mx-auto w-full max-w-xl rounded-[32px] bg-black/35 p-4 shadow-2xl ring-1 ring-white/20 backdrop-blur-xl sm:p-5">
-          <div className="min-h-[52px] rounded-3xl bg-white/12 p-4 text-center">
-            <div className="text-sm font-semibold text-white">
-              {busy ? "Verifying with InsightFace…" : cameraStatus === "ready" ? FACE_VERIFICATION_TIPS[tipIndex] : verification.guidance}
-            </div>
-            <div className="mt-1 text-xs text-white/65">
-              Backend InsightFace performs all biometric verification.
-            </div>
-          </div>
-
-          {cameraError && <p className="mt-3 rounded-2xl bg-red-500/20 p-3 text-center text-xs font-semibold text-red-50 ring-1 ring-red-200/30">{cameraError}</p>}
-          {backendMessage && <p className="mt-3 rounded-2xl bg-amber-400/20 p-3 text-center text-xs font-semibold text-amber-50 ring-1 ring-amber-100/30">{backendMessage}</p>}
-
-          {cameraStatus === "ready" ? (
-            <button type="button" onClick={captureAndVerifyManually} disabled={busy} className="mt-4 inline-flex min-h-[48px] w-full items-center justify-center gap-3 rounded-full bg-white px-6 py-4 text-base font-extrabold text-[#17061E] shadow-[0_18px_45px_-20px_rgba(255,255,255,0.7)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60">
-              {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Camera className="h-5 w-5" />}
-              Capture & Verify
-            </button>
-          ) : (
-            <button type="button" onClick={startCamera} disabled={cameraStatus === "requesting"} className="mt-4 inline-flex min-h-[48px] w-full items-center justify-center gap-3 rounded-full bg-white px-6 py-4 text-base font-extrabold text-[#17061E] shadow-[0_18px_45px_-20px_rgba(255,255,255,0.7)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60">
-              {cameraStatus === "requesting" ? <Loader2 className="h-5 w-5 animate-spin" /> : <Camera className="h-5 w-5" />}
-              {cameraStatus === "requesting" ? "Opening Camera" : "Retry Camera"}
-            </button>
-          )}
-        </motion.div>
+        {cameraStatus === "ready" ? (
+          <ShoreButton
+            variant="primary"
+            size="xl"
+            fullWidth
+            loading={busy}
+            onClick={captureAndVerifyManually}
+            icon={<Camera className="h-5 w-5" />}
+          >
+            Capture & Verify Face
+          </ShoreButton>
+        ) : (
+          <ShoreButton
+            variant="secondary"
+            size="xl"
+            fullWidth
+            loading={cameraStatus === "requesting"}
+            onClick={startCamera}
+          >
+            Retry Camera
+          </ShoreButton>
+        )}
       </div>
 
       <canvas ref={canvasRef} className="hidden" />

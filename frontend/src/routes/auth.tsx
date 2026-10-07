@@ -137,51 +137,53 @@ function AuthPage() {
   }
 
   return (
-    <div className="relative grid min-h-screen place-items-center overflow-hidden bg-background px-6 text-foreground">
-      <div className="pointer-events-none absolute inset-0 hero-glow opacity-70" />
-      <div className="pointer-events-none absolute inset-0 grid-bg opacity-30 [mask-image:radial-gradient(ellipse_at_center,black_30%,transparent_75%)]" />
-
+    <div className="relative grid min-h-screen place-items-center overflow-hidden bg-[#f1f7fd] px-6 py-12 text-slate-900" style={{ background: "linear-gradient(180deg, #c4e0fd 0%, #dfedfd 220px, #f0f6fc 550px, #f8fafc 1200px)" }}>
       <motion.div
-        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}
+        initial={false}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
         className="relative w-full max-w-md"
       >
-        <Link to="/" className="mb-6 inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-3 w-3" /> Back home
+        <Link to="/" className="mb-6 inline-flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-slate-900 transition-colors">
+          <ArrowLeft className="h-3.5 w-3.5" /> Back home
         </Link>
 
-        <div className="rounded-3xl border border-border bg-card/70 p-8 backdrop-blur-xl shadow-2xl">
-          <div className="flex items-center gap-2">
-            <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-primary to-accent">
-              <Layers className="h-4 w-4 text-primary-foreground" />
+        <div className="rounded-3xl border border-white/90 bg-white/95 p-8 shadow-xl shadow-blue-500/5 backdrop-blur-xl">
+          <div className="flex items-center gap-2.5">
+            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-[#0077f6] text-white shadow-sm">
+              <Layers className="h-5 w-5" />
             </div>
-            <span className="font-semibold tracking-tight">Shore Leave</span>
+            <div>
+              <span className="font-extrabold tracking-tight text-slate-900 text-base">Shore Leave</span>
+              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">AMET University</span>
+            </div>
           </div>
 
-          <h1 className="mt-6 text-2xl font-semibold tracking-tight">
+          <h1 className="mt-6 text-2xl font-black tracking-tight text-slate-900">
             {mode === "signin" ? "Sign in" : "Create account"}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {role === "admin" ? "Administrator portal" : "Cadet portal"}
+          <p className="mt-1 text-xs text-slate-500">
+            {role === "admin" ? "Administrative management center" : "Cadet portal & digital gate pass"}
           </p>
 
           {/* Role indicator pills */}
-          <div className="mt-5 inline-flex rounded-full border border-border bg-secondary/40 p-1 text-xs">
-            <Link to="/auth" search={{ role: "cadet" }} className={`rounded-full px-3 py-1 ${role === "cadet" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Cadet</Link>
-            <Link to="/auth" search={{ role: "admin" }} className={`rounded-full px-3 py-1 ${role === "admin" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Administrator</Link>
+          <div className="mt-5 inline-flex w-full rounded-2xl border border-slate-200 bg-slate-50 p-1 text-xs font-bold">
+            <Link to="/auth" search={{ role: "cadet" }} className={`flex-1 rounded-xl py-2 text-center transition-all ${role === "cadet" ? "bg-[#0077f6] text-white shadow-xs" : "text-slate-500 hover:text-slate-900"}`}>Cadet</Link>
+            <Link to="/auth" search={{ role: "admin" }} className={`flex-1 rounded-xl py-2 text-center transition-all ${role === "admin" ? "bg-[#0077f6] text-white shadow-xs" : "text-slate-500 hover:text-slate-900"}`}>Administrator</Link>
           </div>
 
-          <form onSubmit={onSubmit} className="mt-6 space-y-3">
+          <form onSubmit={onSubmit} className="mt-6 space-y-4">
             {mode === "signup" && role === "cadet" && (
               <Field label="Full name" type="text" value={fullName} onChange={setFullName} required />
             )}
             {mode === "signup" && role === "cadet" && (
               <label className="block">
-                <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Branch</span>
+                <span className="mb-1.5 block text-xs font-bold text-slate-600">Branch</span>
                 <select
                   value={branch}
                   onChange={(e) => setBranch(e.target.value as typeof BRANCHES[number]["code"])}
                   required
-                  className="w-full rounded-xl border border-border bg-background/60 px-4 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-primary/60"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50/60 px-4 py-3 text-xs text-slate-800 outline-none transition-all focus:border-[#0077f6] focus:bg-white"
                 >
                   {BRANCHES.map((b) => (
                     <option key={b.code} value={b.code}>{b.label}</option>
@@ -190,15 +192,15 @@ function AuthPage() {
               </label>
             )}
             <Field label={role === "admin" ? "Admin number or email" : role === "cadet" && mode === "signin" ? "Roll number" : "Email"} type={role === "admin" || (role === "cadet" && mode === "signin") ? "text" : "email"} value={email} onChange={(value) => { setEmail(value); setCadetSessionToken(null); }} required autoComplete="username" />
-            <Field label={role === "cadet" && mode === "signin" ? (cadetSessionToken ? "OTP" : "Registered email") : "Password"} type={role === "cadet" && mode === "signin" ? "text" : "password"} value={password} onChange={setPassword} required autoComplete={mode === "signin" ? "current-password" : "new-password"} />
+            <Field label={role === "cadet" && mode === "signin" ? (cadetSessionToken ? "OTP code" : "Registered email") : "Password"} type={role === "cadet" && mode === "signin" ? "text" : "password"} value={password} onChange={setPassword} required autoComplete={mode === "signin" ? "current-password" : "new-password"} />
             {rateLimitMessage && (
-              <p className="rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs font-medium text-warning">
+              <p className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">
                 {rateLimitMessage}
               </p>
             )}
             <button
               type="submit" disabled={loading}
-              className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-primary to-accent py-3 text-sm font-semibold text-primary-foreground shadow-[0_10px_30px_-10px_oklch(0.72_0.18_45/0.6)] transition-transform hover:scale-[1.01] disabled:opacity-60"
+              className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#0077f6] py-3.5 text-sm font-bold text-white shadow-md shadow-blue-500/15 hover:bg-[#0066d6] transition-all disabled:opacity-60"
             >
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
               {role === "cadet" && mode === "signin" && !cadetSessionToken ? "Send OTP" : mode === "signin" ? "Sign in" : "Create account"}
@@ -208,14 +210,14 @@ function AuthPage() {
           {role === "cadet" && (
             <button
               onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
-              className="mt-5 w-full text-center text-xs text-muted-foreground hover:text-foreground"
+              className="mt-5 w-full text-center text-xs font-bold text-slate-500 hover:text-[#0077f6] transition-colors"
             >
               {mode === "signin" ? "Need an account? Sign up" : "Have an account? Sign in"}
             </button>
           )}
 
           {role === "admin" && (
-            <p className="mt-4 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+            <p className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/60 p-3.5 text-xs text-blue-900 font-medium">
               Administrator accounts are created and OTP-verified by an existing administrator in Dashboard Settings.
             </p>
           )}
@@ -231,11 +233,11 @@ type FieldProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" |
 function Field({ label, value, onChange, type = "text", ...rest }: FieldProps) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="mb-1.5 block text-xs font-bold text-slate-600">{label}</span>
       <input
         {...rest}
         type={type} value={value} onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-xl border border-border bg-background/60 px-4 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-primary/60"
+        className="w-full rounded-2xl border border-slate-200 bg-slate-50/60 px-4 py-3 text-xs text-slate-800 outline-none transition-all focus:border-[#0077f6] focus:bg-white focus:ring-2 focus:ring-blue-100"
       />
     </label>
   );
