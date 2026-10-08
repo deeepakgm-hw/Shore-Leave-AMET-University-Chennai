@@ -62,51 +62,51 @@
 }
 
 :root {
-  --radius: 1.5rem;
-  --background: oklch(0.97 0.02 235);
-  --foreground: #0f172a;
-  --card: #ffffff;
-  --card-foreground: #0f172a;
-  --popover: #ffffff;
-  --popover-foreground: #0f172a;
-  --primary: #0077f6;
-  --primary-foreground: #ffffff;
-  --secondary: #f0f7ff;
-  --secondary-foreground: #0f172a;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #38bdf8;
-  --accent-foreground: #ffffff;
-  --destructive: #ef4444;
-  --destructive-foreground: #ffffff;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --border: rgba(226, 232, 240, 0.9);
-  --input: rgba(203, 213, 225, 0.8);
-  --ring: #0077f6;
-  --glow-primary: #60a5fa;
-  --glow-secondary: #93c5fd;
-  --gradient-glow: radial-gradient(ellipse at center, rgba(147, 197, 253, 0.45) 0%, rgba(224, 242, 254, 0.2) 50%, transparent 75%);
-  --gradient-hero: linear-gradient(180deg, #c7e1fd 0%, #e2effd 220px, #f1f7fd 600px, #f8fafc 1200px);
-  --gradient-primary: linear-gradient(135deg, #0077f6 0%, #0056cc 100%);
-  --gradient-aurora: linear-gradient(120deg, #dbeafe, #eff6ff 50%, #e0f2fe);
-  --gradient-card: linear-gradient(160deg, #ffffff 0%, #f8fbff 100%);
-  --shadow-elegant: 0 24px 60px -20px rgba(0, 119, 246, 0.15);
-  --shadow-glow: 0 10px 30px -8px rgba(0, 119, 246, 0.28);
-  --shadow-card: 0 8px 30px -10px rgba(15, 23, 42, 0.06);
-  --chart-1: #0077f6;
-  --chart-2: #10b981;
-  --chart-3: #f59e0b;
-  --chart-4: #8b5cf6;
-  --chart-5: #06b6d4;
-  --sidebar: #ffffff;
-  --sidebar-foreground: #0f172a;
-  --sidebar-primary: #0077f6;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #f0f7ff;
-  --sidebar-accent-foreground: #0077f6;
-  --sidebar-border: rgba(226, 232, 240, 0.8);
-  --sidebar-ring: #0077f6;
+  --radius: 1.25rem;
+  --background: oklch(0.93 0.04 235);
+  --foreground: oklch(0.18 0.02 250);
+  --card: oklch(1 0 0 / 0.92);
+  --card-foreground: oklch(0.18 0.02 250);
+  --popover: oklch(0.99 0.005 235);
+  --popover-foreground: oklch(0.18 0.02 250);
+  --primary: oklch(0.18 0.02 250);
+  --primary-foreground: oklch(0.98 0.005 235);
+  --secondary: oklch(0.96 0.02 235);
+  --secondary-foreground: oklch(0.22 0.02 250);
+  --muted: oklch(0.93 0.02 235);
+  --muted-foreground: oklch(0.5 0.03 245);
+  --accent: oklch(0.7 0.16 240);
+  --accent-foreground: oklch(0.98 0.005 235);
+  --destructive: oklch(0.62 0.22 25);
+  --destructive-foreground: oklch(0.98 0.005 235);
+  --success: oklch(0.7 0.17 155);
+  --warning: oklch(0.82 0.16 80);
+  --border: oklch(0.2 0.02 250 / 0.08);
+  --input: oklch(0.2 0.02 250 / 0.1);
+  --ring: oklch(0.7 0.16 240);
+  --glow-primary: oklch(0.78 0.14 235);
+  --glow-secondary: oklch(0.85 0.1 220);
+  --gradient-glow: radial-gradient(ellipse at center, oklch(0.85 0.12 230 / 0.6) 0%, oklch(0.92 0.06 230 / 0.25) 45%, transparent 75%);
+  --gradient-hero: radial-gradient(ellipse 110% 80% at 50% 0%, oklch(0.98 0.02 235) 0%, oklch(0.88 0.06 235) 45%, oklch(0.78 0.1 230) 100%);
+  --gradient-primary: linear-gradient(135deg, oklch(0.22 0.02 250) 0%, oklch(0.12 0.02 250) 100%);
+  --gradient-aurora: linear-gradient(120deg, oklch(0.85 0.1 230), oklch(0.92 0.06 225) 50%, oklch(0.88 0.08 250));
+  --gradient-card: linear-gradient(160deg, oklch(1 0 0 / 0.96), oklch(0.98 0.01 235 / 0.86));
+  --shadow-elegant: 0 30px 80px -30px oklch(0.4 0.1 235 / 0.3);
+  --shadow-glow: 0 12px 40px -12px oklch(0.6 0.16 235 / 0.35);
+  --shadow-card: 0 8px 30px -12px oklch(0.3 0.06 235 / 0.18);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.7 0.2 320);
+  --chart-3: oklch(0.65 0.2 220);
+  --chart-4: oklch(0.82 0.18 80);
+  --chart-5: oklch(0.75 0.2 160);
+  --sidebar: oklch(0.984 0.003 247.858);
+  --sidebar-foreground: oklch(0.129 0.042 264.695);
+  --sidebar-primary: oklch(0.208 0.042 265.755);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.968 0.007 247.896);
+  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
+  --sidebar-border: oklch(0.929 0.013 255.508);
+  --sidebar-ring: oklch(0.704 0.04 256.788);
 }
 
 @theme inline {
@@ -121,8 +121,8 @@
   --card-foreground: oklch(0.984 0.003 247.858);
   --popover: oklch(0.208 0.042 265.755);
   --popover-foreground: oklch(0.984 0.003 247.858);
-  --primary: #38bdf8;
-  --primary-foreground: #0f172a;
+  --primary: oklch(0.929 0.013 255.508);
+  --primary-foreground: oklch(0.208 0.042 265.755);
   --secondary: oklch(0.279 0.041 260.031);
   --secondary-foreground: oklch(0.984 0.003 247.858);
   --muted: oklch(0.279 0.041 260.031);
@@ -133,7 +133,7 @@
   --destructive-foreground: oklch(0.984 0.003 247.858);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: #38bdf8;
+  --ring: oklch(0.551 0.027 264.364);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -165,11 +165,15 @@
   }
 
   body {
-    background-color: #f1f7fd;
-    color: #0f172a;
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
-    background-image: linear-gradient(180deg, #c4e0fd 0%, #dfedfd 220px, #f0f6fc 550px, #f8fafc 1200px);
+    background-image:
+      radial-gradient(1200px 600px at 10% -10%, oklch(1 0 0 / 0.7), transparent 60%),
+      radial-gradient(900px 500px at 90% 0%, oklch(0.96 0.04 220 / 0.7), transparent 65%),
+      radial-gradient(1000px 700px at 50% 110%, oklch(0.99 0.01 235 / 0.9), transparent 70%);
     background-attachment: fixed;
   }
 
@@ -188,11 +192,15 @@
     touch-action: manipulation;
   }
 
-  h1, h2, h3, h4, .font-display {
+  h1, h2, h3, .font-display {
+    font-family: "Instrument Serif", ui-serif, Georgia, serif;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+  }
+
+  .font-sans h1, .font-sans h2, .font-sans h3, .font-sans h4, h1.font-sans, h2.font-sans, h3.font-sans, h4.font-sans {
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    font-weight: 700;
     letter-spacing: -0.02em;
-    color: #0f172a;
   }
 }
 

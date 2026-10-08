@@ -421,7 +421,10 @@ function CadetDashboard() {
   };
 
   return (
-    <div className="relative min-h-screen text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900">
+    <div
+      className="relative min-h-screen text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900 font-sans"
+      style={{ background: "linear-gradient(180deg, #c4e0fd 0%, #dfedfd 220px, #f0f6fc 550px, #f8fafc 1200px)" }}
+    >
       {/* Top Header / Navigation (Consistent with APK) */}
       <CadetTopHeader
         name={profileName}
