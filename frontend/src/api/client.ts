@@ -1,6 +1,12 @@
 import { TokenService } from "@/services/token.service";
 
-export const API = import.meta.env.VITE_API_URL || (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
+export const API =
+  import.meta.env.VITE_API_URL ||
+  (typeof window !== "undefined"
+    ? window.location.hostname.endsWith("shoreleave.in") && !window.location.hostname.startsWith("api.")
+      ? "https://api.shoreleave.in"
+      : window.location.origin
+    : "http://localhost:3000");
 
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number, public readonly retryAfterSeconds?: number) { super(message); this.name = "ApiError"; }
