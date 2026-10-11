@@ -19,6 +19,7 @@ import {
   ShieldCheck, AlertTriangle, Plus, UserPlus, FileSpreadsheet, Megaphone, Sparkles,
   TrendingUp, Clock, MapPin, LogOut, LogIn, Camera, KeyRound, Download,
   RefreshCw, Filter, Send, HelpCircle, Loader2, MoreVertical, Trash2, Ban, Fingerprint, TicketCheck,
+  Layers,
 } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 import {
@@ -92,6 +93,7 @@ function useAdminProfile() {
 
 const NAV = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "other", label: "Other", icon: Layers },
   { id: "cadets", label: "Cadets", icon: Users },
   { id: "leave", label: "Leave Requests", icon: Plane },
   { id: "tokens", label: "Leave Token Control", icon: TicketCheck },
@@ -150,6 +152,7 @@ function AdminDashboard() {
             transition={{ duration: 0.35 }}
           >
             {active === "dashboard" && <DashboardView name={profileName} profile={adminProfile ?? null} onNavigate={setActive} />}
+            {active === "other" && <OthersView onNavigate={setActive} />}
             {active === "cadets" && <CadetsView />}
             {active === "leave" && <LeaveView />}
             {active === "tokens" && <LeaveTokenControlView />}
@@ -179,12 +182,22 @@ function AdminDashboard() {
 
 type AdminProfile = { userId: string; email?: string; role: "super_admin" | "hod" | "cadet"; branch: BranchCode | null } | null;
 
-function DashboardView({ name, profile, onNavigate }: { name: string; profile: AdminProfile; onNavigate: (view: string) => void }) {
-  const isSuper = profile?.role === "super_admin";
+function DashboardView({ name, profile, onNavigate }: { name: string; profile: AdminProfile; onNavigate?: (view: string) => void }) {
   return (
     <>
       <Welcome name={name} />
-      {isSuper && <BranchComparison />}
+      <BranchComparison />
+      <div className="mt-6">
+        <AttendanceOverview />
+      </div>
+    </>
+  );
+}
+
+function OthersView({ onNavigate }: { onNavigate: (view: string) => void }) {
+  return (
+    <>
+      <ViewHeader title="Other" subtitle="Live gate operations, biometric controls, analytics and activity feeds" icon={Layers} />
       <StatGrid />
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <LiveGateMonitor />
@@ -201,8 +214,7 @@ function DashboardView({ name, profile, onNavigate }: { name: string; profile: A
         <NfcManagement />
         <EmergencyCodeStats />
       </div>
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <AttendanceOverview />
+      <div className="mt-6">
         <ReturnMonitor />
       </div>
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -2438,7 +2450,7 @@ function BranchComparison() {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Branch comparison</h2>
-          <p className="text-sm text-muted-foreground">Live snapshot across all 5 branches · super admin only</p>
+          <p className="text-sm text-muted-foreground">Live snapshot across all 5 branches</p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary">
           <ShieldCheck className="h-3 w-3" /> All branches
