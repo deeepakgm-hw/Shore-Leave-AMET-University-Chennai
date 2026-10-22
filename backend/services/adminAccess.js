@@ -1,3 +1,7 @@
+/**
+ * Resolve effective administrative role and active temporary grants for an officer.
+ * Permanent roles stored in the database are never mutated.
+ */
 function getOfficerAccess(officer, now = new Date()) {
   const permanentRole = officer?.role || 'duty_officer';
   const grant = officer?.temporaryAdminGrant;
