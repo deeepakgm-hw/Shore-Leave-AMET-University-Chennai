@@ -18,7 +18,7 @@ import {
   Search, ChevronDown, Check, X, Eye, Activity, ArrowUpRight, ArrowDownRight,
   ShieldCheck, AlertTriangle, Plus, UserPlus, FileSpreadsheet, Megaphone, Sparkles,
   TrendingUp, Clock, MapPin, LogOut, LogIn, Camera, KeyRound, Download,
-  RefreshCw, Filter, Send, HelpCircle, Loader2, MoreVertical, Trash2, Ban, Fingerprint, TicketCheck,
+  RefreshCw, Filter, Send, HelpCircle, Loader2, MoreVertical, Trash2, Ban, Fingerprint,
   Layers,
 } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, PieChart, Pie, Cell } from "recharts";
@@ -96,7 +96,6 @@ const NAV = [
   { id: "other", label: "Other", icon: Layers },
   { id: "cadets", label: "Cadets", icon: Users },
   { id: "leave", label: "Leave Requests", icon: Plane },
-  { id: "tokens", label: "Leave Token Control", icon: TicketCheck },
   { id: "emergency", label: "Emergency Codes", icon: KeyRound },
   { id: "face", label: "Face Enroll", icon: ScanFace },
   { id: "fingerprint", label: "Fingerprint Enroll", icon: Fingerprint },
@@ -155,7 +154,6 @@ function AdminDashboard() {
             {active === "other" && <OthersView onNavigate={setActive} />}
             {active === "cadets" && <CadetsView />}
             {active === "leave" && <LeaveView />}
-            {active === "tokens" && <LeaveTokenControlView />}
             {active === "checkin" && <CheckInView />}
             {active === "checkout" && <CheckOutView />}
             {active === "face" && <FaceView />}
@@ -566,19 +564,6 @@ function LeaveView() {
   );
 }
 
-function LeaveTokenControlView() {
-  return (
-    <>
-      <ViewHeader
-        title="Leave Token Control"
-        subtitle="Generate, revoke and reissue leave tokens with live cadet dashboard updates"
-        icon={TicketCheck}
-      />
-      <div className="mt-8"><LeaveTokenControl /></div>
-    </>
-  );
-}
-
 function NewLeaveRequestsPanel({ filter = "all", search = "" }: { filter?: "all"|"pending"|"approved"|"rejected"; search?: string }) {
   const qc = useQueryClient();
   const { data: items = [], isLoading, isError, refetch, dataUpdatedAt } = useQuery({
@@ -671,7 +656,7 @@ function NewLeaveRequestsPanel({ filter = "all", search = "" }: { filter?: "all"
                   <td className="px-6 py-3">
                     <div className="flex justify-end gap-1.5">
                       <button disabled={!canDecide || decision.isPending} onClick={() => decision.mutate({ roll, status: "approved" })} className="rounded-full border border-success/30 px-3 py-1 text-xs font-medium text-success hover:bg-success/10 disabled:opacity-30">Approve</button>
-                      <button disabled={!canDecide || decision.isPending} onClick={() => decision.mutate({ roll, status: "rejected", reason: "Rejected by administrator" })} className="rounded-full border border-destructive/30 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-30">Reject</button>
+                      <button disabled={!canDecide || decision.isPending} onClick={() => { const reason = window.prompt("Enter the reason for rejecting this leave request:"); if (!reason?.trim()) { toast.error("A rejection reason is required."); return; } if (window.confirm(`Reject this leave request?\n\nReason: ${reason.trim()}`)) decision.mutate({ roll, status: "rejected", reason: reason.trim() }); }} className="rounded-full border border-destructive/30 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-30">Reject</button>
                     </div>
                   </td>
                 </motion.tr>
@@ -852,6 +837,10 @@ function LeaveTokenControl() {
     </motion.section>
   );
 }
+
+// Retained only to avoid deleting historical source during the safe retirement
+// of Leave Token Control. It is not reachable from navigation.
+void LeaveTokenControl;
 
 function CheckInView() {
   const [mode, setMode] = useState<"nfc" | "scan" | "otp" | "manual" | "late">("nfc");
