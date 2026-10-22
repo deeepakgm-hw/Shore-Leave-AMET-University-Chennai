@@ -1912,9 +1912,11 @@ function Welcome({ name }: { name: string }) {
 function StatGrid() {
   const { data, isLoading } = useQuery({ queryKey: queryKeys.admin.summary, queryFn: fetchAdminSummary });
   const stats = [
+    { label: "Total Leave Requests", value: data?.totalLeaveRequests ?? 0, hint: "Historical and current", icon: Plane },
+    { label: "Requests Awaiting Action", value: data?.pending ?? 0, hint: "Assigned to your authority", icon: Clock },
+    { label: "Approved Requests", value: data?.approvedRequests ?? 0, hint: "All recorded approvals", icon: Check },
+    { label: "Rejected Requests", value: data?.rejectedRequests ?? 0, hint: "All recorded rejections", icon: X },
     { label: "Total Cadets", value: data?.totalCadets ?? 0, hint: "Enrolled this term", icon: Users },
-    { label: "Pending Requests", value: data?.pending ?? 0, hint: "Awaiting review", icon: Clock },
-    { label: "Approved Today", value: data?.approvedToday ?? 0, hint: "Across all wings", icon: Check },
     { label: "Cadets Outside", value: data?.outside ?? 0, hint: "Currently on leave", icon: Plane },
     { label: "Check-ins Today", value: data?.gateEntries ?? 0, hint: "Gate entries", icon: ArrowDownRight },
     { label: "Check-outs Today", value: data?.gateExits ?? 0, hint: "Gate exits", icon: ArrowUpRight },
@@ -1922,7 +1924,6 @@ function StatGrid() {
     { label: "Blocked Cadets", value: data?.blockedCadets ?? 0, hint: `${data?.blockedCadetPercentage ?? 0}% leave blocked`, icon: Ban },
     { label: "Unknown NFC", value: data?.unknownNfc ?? 0, hint: "Unregistered card taps", icon: HelpCircle },
     { label: "Denied Entries", value: data?.denied ?? 0, hint: "Gate rejections", icon: X },
-    { label: "Rejected Leaves", value: data?.rejectedToday ?? 0, hint: "Today", icon: X },
     { label: "Pending Face Enrol", value: data?.facePending ?? 0, hint: `${data?.facePct ?? 0}% enrolled`, icon: ScanFace },
   ];
   return (

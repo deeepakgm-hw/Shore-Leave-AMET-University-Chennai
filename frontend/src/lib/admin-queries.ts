@@ -15,6 +15,11 @@ const BRANCHES = [
 ] as const;
 
 type BackendStats = {
+  totalLeaveRequests?: number;
+  pendingRequests?: number;
+  awaitingAction?: number;
+  approvedRequests?: number;
+  rejectedRequests?: number;
   totalShoreLeave?: number;
   totalMedicalLeave?: number;
   totalSpecialLeave?: number;
@@ -294,7 +299,10 @@ export async function fetchAdminSummary(): Promise<AdminSummary> {
     totalCadets,
     outside: stats.totalCheckedOut ?? outside,
     inside: Math.max(0, totalCadets - (stats.totalCheckedOut ?? outside)),
-    pending: stats.totalPendingHodApproval ?? 0,
+    pending: stats.awaitingAction ?? stats.pendingRequests ?? stats.totalPendingHodApproval ?? 0,
+    totalLeaveRequests: stats.totalLeaveRequests ?? 0,
+    approvedRequests: stats.approvedRequests ?? 0,
+    rejectedRequests: stats.rejectedRequests ?? 0,
     approvedToday: stats.totalLeavesToday ?? 0,
     rejectedToday: logs.filter((log) => log.action === "LEAVE_REJECTED").length,
     gateEntries: stats.totalCheckedInToday ?? 0,

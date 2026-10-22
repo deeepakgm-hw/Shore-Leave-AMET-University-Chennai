@@ -6708,7 +6708,7 @@ async function buildDashboardSnapshot() {
   const endOfToday = new Date(startOfToday);
   endOfToday.setDate(endOfToday.getDate() + 1);
 
-  const [records, cadetsWithPending, totalCadets, blockedCadets] = await Promise.all([
+  const [records, cadetsWithPending, totalCadets, blockedCadets, totalLeaveRecords, approvedLeaveRecords, rejectedLeaveRecords] = await Promise.all([
     LeaveRecord.find()
       .select(DASHBOARD_RECORD_FIELDS)
       .sort({ checkOutDate: -1, passIssuedAt: -1, _id: -1 })
@@ -6725,6 +6725,16 @@ async function buildDashboardSnapshot() {
         { leaveBlockedUntil: { $exists: false } },
         { leaveBlockedUntil: { $gt: now } }
       ]
+    }),
+    LeaveRecord.countDocuments(),
+    LeaveRecord.countDocuments({
+      $or: [
+        { approvalStatus: 'approved' },
+        { status: { $in: ['approved', 'out', 'returned', 'late_return'] } }
+      ]
+    }),
+    LeaveRecord.countDocuments({
+      $or: [{ approvalStatus: 'rejected' }, { status: 'rejected' }]
     })
   ]);
 
@@ -6751,12 +6761,22 @@ async function buildDashboardSnapshot() {
   const pendingHodCount = cadetsWithPending
     .filter(cadet => cadet.pendingLeave?.approvalStatus === 'pending_approval')
     .length;
+  const pendingApprovedCount = cadetsWithPending.filter(cadet => cadet.pendingLeave?.approvalStatus === 'approved').length;
+  const pendingRejectedCount = cadetsWithPending.filter(cadet => cadet.pendingLeave?.approvalStatus === 'rejected').length;
 
   const byType = type => activeRows.filter(row => row.leaveType === type).length;
   const pendingByType = type => allRows.filter(row => row.leaveType === type && row.approvalStatus === 'pending_approval').length;
   const rejectedByType = type => allRows.filter(row => row.leaveType === type && (row.approvalStatus === 'rejected' || row.status === 'rejected')).length;
   const expiredByType = type => allRows.filter(row => row.leaveType === type && (row.status === 'overdue' || row.status === 'expired')).length;
   const stats = {
+    // LeaveRecord preserves reviewed/issued leaves while pendingLeave holds the
+    // current request. Keep these counts separate from notifications and derive
+    // them directly from persisted records rather than audit-log approximations.
+    totalLeaveRequests: totalLeaveRecords + cadetsWithPending.length,
+    pendingRequests: pendingHodCount,
+    awaitingAction: pendingHodCount,
+    approvedRequests: approvedLeaveRecords + pendingApprovedCount,
+    rejectedRequests: rejectedLeaveRecords + pendingRejectedCount,
     totalHomeLeave: byType('Home Leave'),
     totalMedicalLeave: byType('Medical Leave'),
     totalEmergencyLeave: byType('Emergency Leave'),

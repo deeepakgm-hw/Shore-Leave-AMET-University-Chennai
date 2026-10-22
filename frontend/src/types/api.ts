@@ -89,6 +89,9 @@ export interface GateActionResult {
 }
 
 export interface AdminSummary {
+  totalLeaveRequests?: number;
+  approvedRequests?: number;
+  rejectedRequests?: number;
   totalCadets: number;
   outside: number;
   inside: number;
