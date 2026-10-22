@@ -13,6 +13,7 @@ export const queryKeys = {
     nfcCadets: ["admin", "cadets", "nfc"] as const,
     nfcSummary: ["admin", "nfc-summary"] as const,
     leaveRequests: ["admin", "leave-requests"] as const,
+    pendingCount: ["admin", "pending-count"] as const,
     leaveTokenControl: ["admin", "leave-token-control"] as const,
     pendingCheckout: ["admin", "pending-checkout"] as const,
     leaveStatus: ["admin", "leave-status"] as const,

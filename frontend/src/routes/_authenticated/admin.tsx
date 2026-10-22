@@ -30,6 +30,9 @@ import {
 } from "@/lib/admin-queries";
 import { nfcCheckIn, nfcCheckOut } from "@/lib/gate.functions";
 import { CadetImportDialog } from "@/components/admin/CadetImportDialog";
+import { RejectionReasonModal } from "@/components/admin/RejectionReasonModal";
+import { LeaveDetailsModal } from "@/components/admin/LeaveDetailsModal";
+import { fetchPendingLeaveCount } from "@/lib/admin-queries";
 import { NotificationCenter } from "@/components/admin/NotificationCenter";
 import { FingerprintEnrollment } from "@/components/admin/FingerprintEnrollment";
 import { BiometricGateCheckout } from "@/components/admin/BiometricGateCheckout";
@@ -581,6 +584,8 @@ function LeaveTokenControlView() {
 
 function NewLeaveRequestsPanel({ filter = "all", search = "" }: { filter?: "all"|"pending"|"approved"|"rejected"; search?: string }) {
   const qc = useQueryClient();
+  const [rejectTarget, setRejectTarget] = useState<{ roll: string; cadetName: string; leaveType: string } | null>(null);
+  const [detailsTarget, setDetailsTarget] = useState<LeaveRequest | null>(null);
   const { data: items = [], isLoading, isError, refetch, dataUpdatedAt } = useQuery({
     queryKey: queryKeys.admin.leaveRequests,
     queryFn: fetchRecentRequests,
@@ -589,13 +594,17 @@ function NewLeaveRequestsPanel({ filter = "all", search = "" }: { filter?: "all"
   const decision = useMutation({
     mutationFn: ({ roll, status, reason }: { roll: string; status: "approved" | "rejected"; reason?: string }) => decideLeave(roll, status, reason),
     onSuccess: (_data, vars) => {
-      toast.success(`Leave request ${vars.status}`);
+      toast.success(`Leave request ${vars.status === "rejected" ? "rejected" : "approved"} successfully`);
+      setRejectTarget(null);
+      setDetailsTarget(null);
       qc.invalidateQueries({ queryKey: queryKeys.admin.leaveRequests });
+      qc.invalidateQueries({ queryKey: queryKeys.admin.pendingCount });
       qc.invalidateQueries({ queryKey: ["admin", "dashboard-live-chart"] });
       qc.invalidateQueries({ queryKey: queryKeys.admin.leaveTokenControl });
       qc.invalidateQueries({ queryKey: queryKeys.admin.summary });
       qc.invalidateQueries({ queryKey: queryKeys.admin.leaveStatus });
       qc.invalidateQueries({ queryKey: queryKeys.admin.pendingCheckout });
+      qc.invalidateQueries({ queryKey: queryKeys.admin.notifications });
     },
     onError: (error: unknown) => toast.error(getErrorMessage(error, "Leave action failed")),
   });
@@ -670,8 +679,9 @@ function NewLeaveRequestsPanel({ filter = "all", search = "" }: { filter?: "all"
                   <td className="px-3 py-3"><StatusBadge status={request.status} /></td>
                   <td className="px-6 py-3">
                     <div className="flex justify-end gap-1.5">
+                      <button type="button" onClick={() => setDetailsTarget(request)} className="rounded-full border border-border px-2.5 py-1 text-xs font-medium hover:bg-secondary text-muted-foreground hover:text-foreground">Details</button>
                       <button disabled={!canDecide || decision.isPending} onClick={() => decision.mutate({ roll, status: "approved" })} className="rounded-full border border-success/30 px-3 py-1 text-xs font-medium text-success hover:bg-success/10 disabled:opacity-30">Approve</button>
-                      <button disabled={!canDecide || decision.isPending} onClick={() => decision.mutate({ roll, status: "rejected", reason: "Rejected by administrator" })} className="rounded-full border border-destructive/30 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-30">Reject</button>
+                      <button disabled={!canDecide || decision.isPending} onClick={() => setRejectTarget({ roll, cadetName: request.cadet?.full_name || request.cadet?.name || "Cadet", leaveType: request.leaveType || request.reason || "Shore Leave" })} className="rounded-full border border-destructive/30 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-30">Reject</button>
                     </div>
                   </td>
                 </motion.tr>
@@ -684,6 +694,34 @@ function NewLeaveRequestsPanel({ filter = "all", search = "" }: { filter?: "all"
         <span>Showing {Math.min(visible.length, 12)} of {visible.length} matching requests.</span>
         <span>Last refreshed {lastUpdated}</span>
       </div>
+      <RejectionReasonModal
+        open={!!rejectTarget}
+        onClose={() => setRejectTarget(null)}
+        roll={rejectTarget?.roll || ""}
+        cadetName={rejectTarget?.cadetName || ""}
+        leaveType={rejectTarget?.leaveType}
+        isPending={decision.isPending}
+        onConfirm={(reason) => {
+          if (rejectTarget?.roll) {
+            decision.mutate({ roll: rejectTarget.roll, status: "rejected", reason });
+          }
+        }}
+      />
+      <LeaveDetailsModal
+        open={!!detailsTarget}
+        onClose={() => setDetailsTarget(null)}
+        request={detailsTarget}
+        isDeciding={decision.isPending}
+        onApprove={(roll) => decision.mutate({ roll, status: "approved" })}
+        onReject={(req) => {
+          setDetailsTarget(null);
+          setRejectTarget({
+            roll: req.roll || req.cadet?.cadet_code || "",
+            cadetName: req.cadet?.full_name || req.cadet?.name || "Cadet",
+            leaveType: req.leaveType || req.reason || "Shore Leave"
+          });
+        }}
+      />
     </motion.section>
   );
 }
@@ -726,6 +764,7 @@ type LeaveTokenControlResponse = {
 function LeaveTokenControl() {
   const qc = useQueryClient();
   const [status, setStatus] = useState("all");
+  const [rejectTarget, setRejectTarget] = useState<{ roll: string; cadetName: string; leaveType: string } | null>(null);
   const { data: requests = [], isLoading, isError, refetch } = useQuery({
     queryKey: queryKeys.admin.leaveTokenControl,
     queryFn: async () => {
@@ -834,7 +873,7 @@ function LeaveTokenControl() {
                   <td className="px-6 py-3">
                     <div className="flex flex-wrap justify-end gap-1.5">
                       <button disabled={!pending || decision.isPending} onClick={() => decision.mutate({ roll: request.roll, nextStatus: "approved" })} className="rounded-full border border-success/30 px-2.5 py-1 text-[11px] font-medium text-success hover:bg-success/10 disabled:opacity-30">Approve</button>
-                      <button disabled={!pending || decision.isPending} onClick={() => decision.mutate({ roll: request.roll, nextStatus: "rejected" })} className="rounded-full border border-destructive/30 px-2.5 py-1 text-[11px] font-medium text-destructive hover:bg-destructive/10 disabled:opacity-30">Reject</button>
+                      <button disabled={!pending || decision.isPending} onClick={() => setRejectTarget({ roll: request.roll, cadetName: request.cadetName || "Cadet", leaveType: request.leaveType || "Shore Leave" })} className="rounded-full border border-destructive/30 px-2.5 py-1 text-[11px] font-medium text-destructive hover:bg-destructive/10 disabled:opacity-30">Reject</button>
                       <button disabled={!approved || tokenActive || token.isPending} onClick={() => token.mutate({ roll: request.roll, action: "generate" })} className="rounded-full border border-border px-2.5 py-1 text-[11px] font-medium hover:bg-secondary disabled:opacity-30">Generate</button>
                       <button disabled={!tokenActive || token.isPending} onClick={() => token.mutate({ roll: request.roll, action: "revoke" })} className="rounded-full border border-warning/30 px-2.5 py-1 text-[11px] font-medium text-warning hover:bg-warning/10 disabled:opacity-30">Revoke</button>
                       <button disabled={!approved || token.isPending} onClick={() => token.mutate({ roll: request.roll, action: "reissue" })} className="rounded-full border border-primary/30 px-2.5 py-1 text-[11px] font-medium text-primary hover:bg-primary/10 disabled:opacity-30">Reissue</button>
@@ -849,6 +888,20 @@ function LeaveTokenControl() {
           </tbody>
         </table>
       </div>
+      <RejectionReasonModal
+        open={!!rejectTarget}
+        onClose={() => setRejectTarget(null)}
+        roll={rejectTarget?.roll || ''}
+        cadetName={rejectTarget?.cadetName || ''}
+        leaveType={rejectTarget?.leaveType}
+        isPending={decision.isPending}
+        onConfirm={(reason) => {
+          if (rejectTarget?.roll) {
+            decision.mutate({ roll: rejectTarget.roll, nextStatus: 'rejected', reason });
+            setRejectTarget(null);
+          }
+        }}
+      />
     </motion.section>
   );
 }
@@ -1801,6 +1854,11 @@ function TopNav({ active, setActive, name, profile, onNotifications }: { active:
     queryFn: () => fetchNotifications("?limit=50"),
     refetchInterval: 60_000,
   });
+  const { data: pendingCount = 0 } = useQuery({
+    queryKey: queryKeys.admin.pendingCount,
+    queryFn: fetchPendingLeaveCount,
+    refetchInterval: 30_000,
+  });
   const initials = name.split(" ").map(x => x[0]).slice(0, 2).join("").toUpperCase() || "AD";
 
   async function signOut() {
@@ -1837,6 +1895,11 @@ function TopNav({ active, setActive, name, profile, onNotifications }: { active:
                   )}
                   <Icon className={`relative z-10 h-3.5 w-3.5 transition-all duration-300 group-hover:scale-110 ${isActive ? "text-background" : ""}`} />
                   <span className={`relative z-10 font-medium transition-colors duration-300 ${isActive ? "text-background" : ""}`}>{item.label}</span>
+                  {item.id === "leave" && pendingCount > 0 && (
+                    <span className="relative z-10 ml-1.5 grid min-h-5 min-w-5 place-items-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-white shadow-sm ring-1 ring-white/30">
+                      {pendingCount > 99 ? "99+" : pendingCount}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -1876,7 +1939,13 @@ function TopNav({ active, setActive, name, profile, onNotifications }: { active:
                 return (
                   <button key={item.id} onClick={() => { setActive(item.id); setMobileOpen(false); }}
                     className={`flex items-center gap-2 rounded-full border px-3 py-2.5 text-sm ${isActive ? "border-transparent bg-foreground text-background" : "border-white/60 bg-white/40 text-muted-foreground hover:text-foreground"}`}>
-                    <Icon className="h-4 w-4" />{item.label}
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                    {item.id === "leave" && pendingCount > 0 && (
+                      <span className="ml-auto rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                        {pendingCount}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -2063,15 +2132,21 @@ function QuickActions() {
 
 function RecentRequests({ filter = "all", search = "" }: { filter?: "all"|"pending"|"approved"|"rejected"; search?: string } = {}) {
   const qc = useQueryClient();
+  const [rejectTarget, setRejectTarget] = useState<{ roll: string; cadetName: string; leaveType: string } | null>(null);
+  const [detailsTarget, setDetailsTarget] = useState<LeaveRequest | null>(null);
   const { data: items = [], isLoading } = useQuery({ queryKey: queryKeys.admin.leaveRequests, queryFn: fetchRecentRequests });
   const mut = useMutation({
     mutationFn: ({ roll, status, reason }: { roll: string; status: "approved" | "rejected"; reason?: string }) => decideLeave(roll, status, reason),
     onSuccess: (_d, vars) => {
-      toast.success(`Request ${vars.status}`);
+      toast.success(`Request ${vars.status === "rejected" ? "rejected" : "approved"}`);
+      setRejectTarget(null);
+      setDetailsTarget(null);
       qc.invalidateQueries({ queryKey: queryKeys.admin.leaveRequests });
+      qc.invalidateQueries({ queryKey: queryKeys.admin.pendingCount });
       qc.invalidateQueries({ queryKey: queryKeys.admin.summary });
       qc.invalidateQueries({ queryKey: queryKeys.admin.leaveStatus });
       qc.invalidateQueries({ queryKey: queryKeys.admin.pendingCheckout });
+      qc.invalidateQueries({ queryKey: queryKeys.admin.notifications });
     },
     onError: (error: unknown) => toast.error(getErrorMessage(error, "Action failed")),
   });
@@ -2109,14 +2184,42 @@ function RecentRequests({ filter = "all", search = "" }: { filter?: "all"|"pendi
               <div className="flex items-center gap-1">
                 <button disabled={r.status !== "pending" || mut.isPending || !(r.roll || r.cadet?.cadet_code)} onClick={() => mut.mutate({ roll: r.roll || r.cadet?.cadet_code || "", status: "approved" })}
                   className="grid h-8 w-8 place-items-center rounded-full border border-border text-success transition-colors hover:bg-success/10 disabled:opacity-30" title="Approve"><Check className="h-4 w-4" /></button>
-                <button disabled={r.status !== "pending" || mut.isPending || !(r.roll || r.cadet?.cadet_code)} onClick={() => mut.mutate({ roll: r.roll || r.cadet?.cadet_code || "", status: "rejected", reason: "Rejected by administrator" })}
+                <button disabled={r.status !== "pending" || mut.isPending || !(r.roll || r.cadet?.cadet_code)} onClick={() => setRejectTarget({ roll: r.roll || r.cadet?.cadet_code || "", cadetName: r.cadet?.full_name || r.cadet?.name || "Cadet", leaveType: r.leaveType || r.reason || "Shore Leave" })}
                   className="grid h-8 w-8 place-items-center rounded-full border border-border text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-30" title="Reject"><X className="h-4 w-4" /></button>
-                <button className="grid h-8 w-8 place-items-center rounded-full border border-border text-muted-foreground hover:text-foreground" title="View"><Eye className="h-4 w-4" /></button>
+                <button type="button" onClick={() => setDetailsTarget(r)} className="grid h-8 w-8 place-items-center rounded-full border border-border text-muted-foreground hover:text-foreground hover:bg-secondary" title="View Details"><Eye className="h-4 w-4" /></button>
               </div>
             </motion.div>
           );
         })}
       </div>
+      <RejectionReasonModal
+        open={!!rejectTarget}
+        onClose={() => setRejectTarget(null)}
+        roll={rejectTarget?.roll || ""}
+        cadetName={rejectTarget?.cadetName || ""}
+        leaveType={rejectTarget?.leaveType}
+        isPending={mut.isPending}
+        onConfirm={(reason) => {
+          if (rejectTarget?.roll) {
+            mut.mutate({ roll: rejectTarget.roll, status: "rejected", reason });
+          }
+        }}
+      />
+      <LeaveDetailsModal
+        open={!!detailsTarget}
+        onClose={() => setDetailsTarget(null)}
+        request={detailsTarget}
+        isDeciding={mut.isPending}
+        onApprove={(roll) => mut.mutate({ roll, status: "approved" })}
+        onReject={(req) => {
+          setDetailsTarget(null);
+          setRejectTarget({
+            roll: req.roll || req.cadet?.cadet_code || "",
+            cadetName: req.cadet?.full_name || req.cadet?.name || "Cadet",
+            leaveType: req.leaveType || req.reason || "Shore Leave"
+          });
+        }}
+      />
     </motion.section>
   );
 }

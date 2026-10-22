@@ -83,6 +83,7 @@ export const endpoints = {
     unblockCadetLeave: (roll: string) => `/api/admin/cadets/${encode(roll)}/unblock-leave`,
     importCadets: "/api/admin/import-cadets",
     leaveRequests: (query = "") => `/api/admin/leave-requests${query}`,
+    pendingLeaveCount: "/api/admin/leave-requests/pending-count",
     decideLeave: (roll: string) => `/api/admin/leave-requests/${encode(roll)}/approve`,
     leaveTokenControl: "/api/admin/leave-token-control",
     leaveTokenAction: (roll: string, action: string) => `/api/admin/leave-token-control/${encode(roll)}/${encode(action)}`,

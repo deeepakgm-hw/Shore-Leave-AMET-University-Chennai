@@ -63,6 +63,28 @@ export interface LeaveRequest {
   created_at?: string;
   status: "pending" | "approved" | "rejected" | "expired" | "returned";
   me?: boolean;
+  rejectionReason?: string | null;
+  reviewedBy?: string | null;
+  reviewedByRole?: string | null;
+  reviewedByUserId?: string | null;
+  reviewedAt?: string | null;
+  rejectedAt?: string | null;
+  rejectedBy?: string | null;
+  rejectedByRole?: string | null;
+  leaveType?: string;
+  leaveReason?: string | null;
+  documentUrl?: string | null;
+  supportingDocument?: {
+    fileName?: string;
+    contentType?: string;
+    size?: number;
+    publicUrl?: string;
+    url?: string;
+    [key: string]: unknown;
+  } | null;
+  returnDate?: string | null;
+  fromTime?: string | null;
+  toTime?: string | null;
 }
 
 export interface GateEvent {

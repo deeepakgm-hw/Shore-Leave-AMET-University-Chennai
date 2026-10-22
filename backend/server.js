@@ -550,6 +550,7 @@ const CadetSchema = new mongoose.Schema({
   monthlyTokenReset: Date,
   profileTheme: { type: String, default: 'default' }
 });
+CadetSchema.index({ 'pendingLeave.approvalStatus': 1 });
 const Cadet = mongoose.model('Cadet', CadetSchema);
 
 const CadetXpLogSchema = new mongoose.Schema({
@@ -638,6 +639,9 @@ const LeaveRecordSchema = new mongoose.Schema({
   approvedBy: String,
   approvedAt: Date,
   rejectionReason: String,
+  rejectedByRole: String,
+  rejectedByUserId: String,
+  rejectedAt: Date,
   passId: String,
   passVerificationToken: String,
   emergencyVerificationCode: { type: String, index: true },
@@ -667,6 +671,8 @@ const LeaveRecordSchema = new mongoose.Schema({
   checkInEmailSentAt: Date,
   checkInEmailFailedAt: Date
 });
+LeaveRecordSchema.index({ roll: 1, createdAt: -1 });
+LeaveRecordSchema.index({ approvalStatus: 1 });
 const LeaveRecord = mongoose.model('LeaveRecord', LeaveRecordSchema);
 
 const LeaveTokenAllocationSchema = new mongoose.Schema({
@@ -750,8 +756,12 @@ const NotificationSchema = new mongoose.Schema({
   actor: String,
   entity: Object,
   url: String,
+  leaveRequestId: { type: String, index: true },
   dedupeKey: { type: String, unique: true, sparse: true }
 }, { collection: 'notifications' });
+NotificationSchema.index({ userRole: 1, read: 1, archived: 1, createdAt: -1 });
+NotificationSchema.index({ recipientRoll: 1, read: 1, archived: 1, createdAt: -1 });
+NotificationSchema.index({ recipientUsername: 1, read: 1, archived: 1, createdAt: -1 });
 const Notification = mongoose.model('Notification', NotificationSchema);
 
 const AuditLogSchema = new mongoose.Schema({
@@ -1738,6 +1748,7 @@ async function createPersistentNotification({ roll, userRole = 'cadet', username
     recipientRoll: roll ? normalizeRoll(roll) : undefined,
     recipientUsername: username || undefined,
     actor,
+    leaveRequestId: entity?.requestId || entity?.leaveRequestId || payload?.entity?.requestId || payload?.entity?.leaveRequestId || undefined,
     entity: entity || payload?.entity || undefined,
     url: payload?.url || undefined,
     dedupeKey: dedupeKey || payload?.dedupeKey || undefined
@@ -2600,6 +2611,10 @@ function publicLeaveRecord(record) {
     approvedBy: source.approvedBy || '',
     approvedAt: source.approvedAt || null,
     rejectionReason: source.rejectionReason || '',
+    rejectedByRole: source.rejectedByRole || '',
+    rejectedByUserId: source.rejectedByUserId || '',
+    rejectedAt: source.rejectedAt || null,
+    supportingDocument: source.supportingDocument || null,
     passId: source.passId || '',
     expired: Boolean(source.expired),
     passIssuedAt: source.passIssuedAt || null,
@@ -3281,7 +3296,7 @@ async function requireOfficer(req, res, next) {
 
     officer.lastLoginAt = new Date();
     await officer.save();
-    req.officer = { username: officer.username, role: officer.role, sessionId: payload.sessionId };
+    req.officer = { username: officer.username, role: officer.role, branch: officer.branch || null, sessionId: payload.sessionId };
     next();
   } catch (err) {
     res.status(401).json({ error: 'Invalid or expired administrator session' });
@@ -3401,8 +3416,8 @@ const authenticateJWT = asyncHandler(async (req, res, next) => {
 
     officer.lastLoginAt = new Date();
     await officer.save();
-    req.officer = { username: officer.username, role: officer.role, sessionId: user.sessionId };
-    req.user = user;
+    req.officer = { username: officer.username, role: officer.role, branch: officer.branch || null, sessionId: user.sessionId };
+    req.user = { ...user, branch: officer.branch || null };
     return next();
   }
 
@@ -3479,6 +3494,16 @@ app.post('/api/notifications/mark-all-read', authenticateJWT, asyncHandler(async
     { $set: { read: true, readAt: new Date() } }
   );
   res.json({ success: true, updated: result.modifiedCount || 0 });
+}));
+
+app.get('/api/notifications/unread-count', authenticateJWT, asyncHandler(async (req, res) => {
+  const unread = await Notification.countDocuments({
+    ...notificationAccessQuery(req),
+    deletedAt: { $exists: false },
+    archived: false,
+    read: false
+  });
+  res.json({ success: true, unread });
 }));
 
 app.patch('/api/notifications/:id/archive', authenticateJWT, asyncHandler(async (req, res) => {
@@ -5116,6 +5141,32 @@ app.post('/api/cadet/shore-leave-request', authenticateJWT, asyncHandler(async (
     }
   });
   const emailResult = await sendLeaveSubmittedEmail(req, cadet, cadet.pendingLeave);
+  await createPersistentNotification({
+    userRole: 'admin',
+    payload: {
+      title: 'New Shore Leave Request',
+      body: `Cadet ${cadet.name || cadet.roll} (${cadet.roll}) submitted a Sunday Shore Leave request for review.`,
+      type: 'leave_request',
+      priority: 'high',
+      entity: {
+        requestId,
+        roll: cadet.roll,
+        name: cadet.name,
+        leaveType: 'Sunday Shore Leave',
+        branch: cadet.course || cadet.batch,
+        dest: dest || 'Unknown'
+      }
+    },
+    actor: cadet.roll,
+    dedupeKey: `leave_req:${requestId}`
+  });
+  emitAdminEvent('leave:submitted', {
+    requestId,
+    roll: cadet.roll,
+    name: cadet.name,
+    leaveType: 'Sunday Shore Leave',
+    branch: cadet.course || cadet.batch
+  });
   emitCadetEvent(cadet, 'leave:requested', { requestId, tokenBalance: publicTokenBalance(balance) });
   return res.status(201).json({
     success: true,
@@ -5236,6 +5287,32 @@ app.post('/api/cadet/leave-request', authenticateJWT, asyncHandler(async (req, r
   });
   if (new Date().getHours() >= 16) await badgeService.awardBadge(cadet._id, 'night_owl').catch(() => {});
   const emailResult = await sendLeaveSubmittedEmail(req, cadet, cadet.pendingLeave);
+  await createPersistentNotification({
+    userRole: 'admin',
+    payload: {
+      title: 'New Shore Leave Request',
+      body: `Cadet ${cadet.name || cadet.roll} (${cadet.roll}) submitted a ${normalizedLeaveType} request for review.`,
+      type: 'leave_request',
+      priority: 'high',
+      entity: {
+        requestId,
+        roll: cadet.roll,
+        name: cadet.name,
+        leaveType: normalizedLeaveType,
+        branch: cadet.course || cadet.batch,
+        dest: dest || 'Unknown'
+      }
+    },
+    actor: cadet.roll,
+    dedupeKey: `leave_req:${requestId}`
+  });
+  emitAdminEvent('leave:submitted', {
+    requestId,
+    roll: cadet.roll,
+    name: cadet.name,
+    leaveType: normalizedLeaveType,
+    branch: cadet.course || cadet.batch
+  });
   res.json({
     success: true,
     status: 'pending_approval',
@@ -7471,6 +7548,18 @@ app.post('/api/admin/cadets/:roll/unblock-leave', authenticateJWT, requireOffice
   return handleLeaveBlockMutation(req, res, false);
 }));
 
+// Pending actionable requests count for Leave Requests badge
+app.get('/api/admin/leave-requests/pending-count', authenticateJWT, requireOfficer, asyncHandler(async (req, res) => {
+  const branchFilter = req.officer?.role === 'duty_officer' && req.officer?.branch
+    ? { $or: [{ batch: req.officer.branch }, { course: req.officer.branch }] }
+    : {};
+  const count = await Cadet.countDocuments({
+    'pendingLeave.approvalStatus': 'pending_approval',
+    ...branchFilter
+  });
+  res.json({ success: true, count, branch: req.officer?.branch || null });
+}));
+
 // Admin fetching leave requests for the live Leave Requests dashboard.
 app.get('/api/admin/leave-requests', requireOfficer, asyncHandler(async (req, res) => {
   const reviewedStatuses = ['pending_approval', 'approved', 'rejected'];
@@ -7695,43 +7784,124 @@ app.get('/api/admin/cadets/:roll/history', authenticateJWT, requireOfficer, asyn
 
 // Admin approving/rejecting leave
 app.put('/api/admin/leave-requests/:roll/approve', requireOfficer, asyncHandler(async (req, res) => {
-  const { status, reason } = req.body; // 'approved' or 'rejected'
+  const decisionStatus = String(req.body.status || req.body.action || '').trim().toLowerCase();
+  const effectiveReason = req.body.reason || req.body.rejectionReason;
   const cadet = await Cadet.findOne({ roll: req.params.roll.toUpperCase() });
   
   if (!cadet || !cadet.pendingLeave) return res.status(404).json({ error: 'Leave request not found' });
   if (cadet.pendingLeave.approvalStatus !== 'pending_approval') {
     return res.status(400).json({ error: 'This leave request has already been reviewed.' });
   }
+
+  if (!['approved', 'rejected', 'approve', 'reject'].includes(decisionStatus)) {
+    return res.status(400).json({ error: 'Valid status ("approved" or "rejected") is required.' });
+  }
+
+  const isReject = decisionStatus === 'rejected' || decisionStatus === 'reject';
   
-  if (status === 'rejected') {
+  if (isReject) {
     const leaveWindow = resolveLeaveWindow(cadet.pendingLeave);
     cadet.pendingLeave.fromDate = leaveWindow.fromDate;
     cadet.pendingLeave.toDate = leaveWindow.toDate;
     cadet.pendingLeave.returnDate = leaveWindow.returnDate;
-    if (!reason || !String(reason).trim()) {
-      return res.status(400).json({ error: 'Rejection reason is required.' });
+    if (!effectiveReason || !String(effectiveReason).trim()) {
+      return res.status(400).json({ error: 'Rejection reason is mandatory and cannot be empty or whitespace.' });
     }
+    const cleanReason = String(effectiveReason).trim();
+    const rejectionTimestamp = new Date();
+    const rejectingOfficerUsername = req.officer.username;
+    const rejectingOfficerRole = req.officer.role || 'duty_officer';
+    const rejectingOfficerId = String(req.officer._id || req.officer.id || req.officer.username);
+
     cadet.pendingLeave.approvalStatus = 'rejected';
-    cadet.pendingLeave.rejectionReason = reason.trim();
-    cadet.pendingLeave.reviewedAt = new Date();
-    cadet.pendingLeave.reviewedBy = req.officer.username;
+    cadet.pendingLeave.rejectionReason = cleanReason;
+    cadet.pendingLeave.reviewedAt = rejectionTimestamp;
+    cadet.pendingLeave.reviewedBy = rejectingOfficerUsername;
+    cadet.pendingLeave.reviewedByRole = rejectingOfficerRole;
+    cadet.pendingLeave.reviewedByUserId = rejectingOfficerId;
+    cadet.pendingLeave.rejectedAt = rejectionTimestamp;
+    cadet.pendingLeave.rejectedBy = rejectingOfficerUsername;
+    cadet.pendingLeave.rejectedByRole = rejectingOfficerRole;
     cadet.markModified('pendingLeave');
-    const tokenBalance = await releaseReservedLeaveTokens(cadet, cadet.pendingLeave, req.officer.username, 'Leave request rejected');
+
+    const tokenBalance = await releaseReservedLeaveTokens(cadet, cadet.pendingLeave, rejectingOfficerUsername, 'Leave request rejected');
     cadet.leaveTokens = tokenBalance.available;
     await cadet.save();
-    const emailResult = await sendRejectionEmail(cadet, cadet.pendingLeave, reason.trim(), req.officer.username);
-    await sendPushToCadet(cadet.roll, {
-      title: 'Leave request rejected',
-      body: `Reason: ${reason.trim()}`,
-      url: '/cadet-dashboard.html'
+
+    // Persist permanent LeaveRecord so history is never erased
+    await LeaveRecord.create({
+      roll: cadet.roll,
+      name: cadet.name,
+      email: cadet.email,
+      batch: cadet.batch,
+      course: cadet.course,
+      studentId: cadet.studentId,
+      dest: cadet.pendingLeave.dest || 'Unknown',
+      fromDate: cadet.pendingLeave.fromDate,
+      toDate: cadet.pendingLeave.toDate,
+      fromTime: cadet.pendingLeave.fromTime,
+      toTime: cadet.pendingLeave.toTime,
+      returnDate: cadet.pendingLeave.returnDate,
+      status: 'rejected',
+      leaveType: cadet.pendingLeave.leaveType || 'Shore Leave',
+      leaveReason: cadet.pendingLeave.reason,
+      leaveDocumentUrl: cadet.pendingLeave.documentUrl,
+      supportingDocument: cadet.pendingLeave.supportingDocument,
+      approvalStatus: 'rejected',
+      approvedBy: rejectingOfficerUsername,
+      approvedAt: rejectionTimestamp,
+      rejectionReason: cleanReason,
+      rejectedByRole: rejectingOfficerRole,
+      rejectedByUserId: rejectingOfficerId,
+      rejectedAt: rejectionTimestamp
     });
-    emitCadetEvent(cadet, 'leave:rejected', { reason: reason.trim(), tokenBalance: publicTokenBalance(tokenBalance) });
+
+    const emailResult = await sendRejectionEmail(cadet, cadet.pendingLeave, cleanReason, rejectingOfficerUsername);
+    await createPersistentNotification({
+      roll: cadet.roll,
+      payload: {
+        title: 'Leave Request Rejected',
+        body: `Your ${cadet.pendingLeave.leaveType} request was rejected. Reason: ${cleanReason}`,
+        type: 'leave_rejected',
+        priority: 'high',
+        entity: {
+          requestId: cadet.pendingLeave.leaveRequestId || cadet.pendingLeave.requestId,
+          leaveRequestId: cadet.pendingLeave.leaveRequestId || cadet.pendingLeave.requestId,
+          roll: cadet.roll,
+          reason: cleanReason,
+          reviewedBy: rejectingOfficerUsername,
+          reviewedByRole: rejectingOfficerRole,
+          reviewedAt: rejectionTimestamp
+        }
+      },
+      actor: rejectingOfficerUsername,
+      dedupeKey: `leave_rej:${cadet.pendingLeave.requestId || cadet.roll}:${rejectionTimestamp.getTime()}`
+    });
+
+    emitCadetEvent(cadet, 'leave:rejected', {
+      reason: cleanReason,
+      tokenBalance: publicTokenBalance(tokenBalance),
+      reviewedBy: rejectingOfficerUsername,
+      reviewedByRole: rejectingOfficerRole,
+      reviewedAt: rejectionTimestamp
+    });
+    emitAdminEvent('leave:reviewed', {
+      roll: cadet.roll,
+      status: 'rejected',
+      reason: cleanReason,
+      reviewedBy: rejectingOfficerUsername
+    });
     await AuditLog.create({
       action: 'LEAVE_REJECTED',
       roll: cadet.roll,
-      details: { reason: reason.trim(), emailDeliveryMode: emailResult.deliveryMode || 'unknown' }
+      details: {
+        reason: cleanReason,
+        reviewedBy: rejectingOfficerUsername,
+        reviewedByRole: rejectingOfficerRole,
+        emailDeliveryMode: emailResult.deliveryMode || 'unknown'
+      }
     });
-    return res.json({ success: true, status, emailResult: publicEmailDeliveryResult(emailResult) });
+    return res.json({ success: true, status: 'rejected', rejectionReason: cleanReason, emailResult: publicEmailDeliveryResult(emailResult) });
   } else {
     const leaveWindow = resolveLeaveWindow(cadet.pendingLeave);
     if (isLeaveBlockActive(cadet)) return sendLeaveBlockedResponse(res, cadet);
@@ -7768,6 +7938,11 @@ app.put('/api/admin/leave-requests/:roll/approve', requireOfficer, asyncHandler(
       url: '/cadet-dashboard.html'
     });
     emitCadetEvent(cadet, 'leave:approved', { gatePassStatus: 'pending_checkout', leaveTokens: cadet.leaveTokens, tokenBalance: publicTokenBalance(tokenBalance) });
+    emitAdminEvent('leave:reviewed', {
+      roll: cadet.roll,
+      status: 'approved',
+      reviewedBy: req.officer.username
+    });
     await AuditLog.create({
       action: 'LEAVE_APPROVED',
       roll: cadet.roll,

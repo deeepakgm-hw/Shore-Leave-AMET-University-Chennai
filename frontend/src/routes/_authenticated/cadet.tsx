@@ -215,6 +215,15 @@ function normalizeCadetDashboardRequests(data: CadetDashboardResponse): LeaveReq
     start_at: data.leave.request.fromDate || new Date().toISOString(),
     end_at: data.leave.request.toDate || new Date().toISOString(),
     status: data.leave.request.approvalStatus === "approved" ? "approved" : data.leave.request.approvalStatus === "rejected" ? "rejected" : "pending",
+    rejectionReason: data.leave.request.rejectionReason || null,
+    reviewedBy: data.leave.request.reviewedBy || null,
+    reviewedByRole: (data.leave.request as any).reviewedByRole || null,
+    reviewedAt: data.leave.request.reviewedAt || null,
+    leaveType: data.leave.request.leaveType || "Shore Leave",
+    leaveReason: data.leave.request.reason || null,
+    documentUrl: data.leave.request.documentUrl || null,
+    supportingDocument: data.leave.request.supportingDocument || null,
+    returnDate: data.leave.request.returnDate || null,
     ...extractGatePassAssetFields(data.leave.request),
   } as LeaveRequest] : [];
   const history = [...(data.history ?? []), ...(data.shoreLeaveHistory ?? [])].map((row) => ({
@@ -225,6 +234,15 @@ function normalizeCadetDashboardRequests(data: CadetDashboardResponse): LeaveReq
     start_at: row.fromDate || new Date().toISOString(),
     end_at: row.toDate || new Date().toISOString(),
     status: row.approvalStatus === "approved" || row.status === "out" ? "approved" : row.approvalStatus === "rejected" ? "rejected" : row.status === "returned" ? "returned" : "pending",
+    rejectionReason: (row as any).rejectionReason || null,
+    reviewedBy: (row as any).approvedBy || (row as any).reviewedBy || null,
+    reviewedByRole: (row as any).rejectedByRole || null,
+    reviewedAt: (row as any).approvedAt || (row as any).rejectedAt || null,
+    leaveType: (row as any).leaveType || "Shore Leave",
+    leaveReason: (row as any).leaveReason || null,
+    documentUrl: (row as any).leaveDocumentUrl || null,
+    supportingDocument: (row as any).supportingDocument || null,
+    returnDate: (row as any).returnDate || null,
     ...extractGatePassAssetFields(row),
   } as LeaveRequest));
   return [...active, ...history];
@@ -971,6 +989,7 @@ function LeavesView({
   onOpenPass: () => void;
 }) {
   const [filter, setFilter] = useState<"all" | "pending" | "approved" | "active" | "rejected">("all");
+  const [selectedLeave, setSelectedLeave] = useState<LeaveRequest | null>(null);
 
   const filteredRequests = useMemo(() => {
     return requests.filter((r) => {
@@ -1049,12 +1068,34 @@ function LeavesView({
                   </div>
                 </div>
 
+                {r.status === "rejected" && (
+                  <div className="rounded-xl border border-red-200 bg-red-50/80 p-3 text-xs text-red-900 space-y-1">
+                    <div className="flex items-center gap-1 font-bold text-red-700">
+                      <span>Reason:</span>
+                      <span className="font-semibold text-red-800">{r.rejectionReason || "Request rejected by authority."}</span>
+                    </div>
+                    {r.reviewedBy && (
+                      <p className="text-[11px] text-red-600">
+                        Reviewed by {r.reviewedBy}
+                        {r.reviewedAt ? ` on ${new Date(r.reviewedAt).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}` : ""}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
                   <span className="text-xs text-slate-400 font-mono">
                     ID: {String(r.id).slice(0, 8)}
                   </span>
 
                   <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLeave(r)}
+                      className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200 transition-colors"
+                    >
+                      Details
+                    </button>
                     {isApproved ? (
                       <>
                         <button
@@ -1084,6 +1125,11 @@ function LeavesView({
           })}
         </div>
       )}
+      <LeaveDetailsModal
+        open={!!selectedLeave}
+        onClose={() => setSelectedLeave(null)}
+        request={selectedLeave}
+      />
     </div>
   );
 }

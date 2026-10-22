@@ -21,7 +21,9 @@ export const ShoreNotificationBell: React.FC<ShoreNotificationBellProps> = ({
     >
       <Bell className="h-5 w-5 text-slate-700" />
       {unreadCount > 0 && (
-        <span className="absolute top-2.5 right-2.5 h-2.5 w-2.5 rounded-full bg-[#0077f6] ring-2 ring-white" />
+        <span className="absolute -top-1 -right-1 grid min-h-5 min-w-5 place-items-center rounded-full bg-[#0077f6] px-1 text-[10px] font-bold text-white shadow-sm ring-2 ring-white">
+          {unreadCount > 99 ? "99+" : unreadCount}
+        </span>
       )}
     </button>
   );

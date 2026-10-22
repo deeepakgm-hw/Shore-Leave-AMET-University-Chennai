@@ -248,6 +248,20 @@ function normalizeLeaveRequest(cadet: BackendCadet): LeaveRequest {
     end_at: leave.toDate || leave.returnDate || leave.fromDate || new Date().toISOString(),
     created_at: leave.requestedAt || leave.reviewedAt,
     status,
+    rejectionReason: leave.rejectionReason || null,
+    reviewedBy: leave.reviewedBy || null,
+    reviewedByRole: (leave as any).reviewedByRole || null,
+    reviewedAt: leave.reviewedAt || null,
+    rejectedAt: (leave as any).rejectedAt || null,
+    rejectedBy: (leave as any).rejectedBy || leave.reviewedBy || null,
+    rejectedByRole: (leave as any).rejectedByRole || null,
+    leaveType: leave.leaveType || "Shore Leave",
+    leaveReason: leave.reason || null,
+    documentUrl: leave.documentUrl || leave.supportingDocument?.publicUrl || leave.supportingDocument?.url || null,
+    supportingDocument: leave.supportingDocument || null,
+    returnDate: leave.returnDate || null,
+    fromTime: (leave as any).fromTime || null,
+    toTime: (leave as any).toTime || null,
   };
 }
 
@@ -496,8 +510,13 @@ export async function unblockCadetLeave(roll: string): Promise<Cadet> {
 
 export function decideLeave(roll: string, status: "approved" | "rejected", reason?: string) {
   return apiRequest<MutationResult>(endpoints.admin.decideLeave(roll), {
-    method: "PUT", body: JSON.stringify({ status, reason }),
+    method: "PUT", body: JSON.stringify({ status, reason: reason ? reason.trim() : undefined }),
   });
+}
+
+export async function fetchPendingLeaveCount(): Promise<number> {
+  const res = await apiRequest<{ success: boolean; count: number }>(endpoints.admin.pendingLeaveCount);
+  return res.count ?? 0;
 }
 
 export function recordGateEvent(): Promise<GateEvent> {
