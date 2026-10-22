@@ -17,6 +17,7 @@
     "migrate:uploads": "node scripts/migrate_uploads_to_supabase.js",
     "fingerprint:adapter": "node local-fingerprint-adapter.js",
     "check": "node --check server.js",
+    "test:admin-access": "node services/adminAccess.test.js",
     "build": "npm run check"
   },
   "keywords": [],

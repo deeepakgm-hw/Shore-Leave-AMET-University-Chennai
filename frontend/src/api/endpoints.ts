@@ -85,9 +85,12 @@ export const endpoints = {
     leaveRequests: (query = "") => `/api/admin/leave-requests${query}`,
     pendingLeaveCount: "/api/admin/leave-requests/pending-count",
     decideLeave: (roll: string) => `/api/admin/leave-requests/${encode(roll)}/approve`,
+    // Retained only for TypeScript compatibility with the retired UI component.
+    // The backend intentionally returns 410 for these legacy endpoints.
     leaveTokenControl: "/api/admin/leave-token-control",
     leaveTokenAction: (roll: string, action: string) => `/api/admin/leave-token-control/${encode(roll)}/${encode(action)}`,
     officers: "/api/admin/officers",
+    temporaryAdmin: (username: string) => `/api/admin/officers/${encode(username)}/temporary-admin`,
     officerProvisionRequestOtp: "/api/admin/officers/provision/request-otp",
     officerProvisionConfirm: "/api/admin/officers/provision/confirm",
     faceEnrollmentStatus: "/api/admin/face-enrollment-status",

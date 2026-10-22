@@ -23,6 +23,9 @@ type OfficerRecord = {
   branch: string;
   isActive: boolean;
   verifiedAt?: string | null;
+  permanentRole?: string;
+  temporaryAdmin?: boolean;
+  temporaryAdminGrant?: { startsAt?: string | null; expiresAt?: string | null; revokedAt?: string | null } | null;
 };
 
 type OtpRequestResponse = {
@@ -48,6 +51,9 @@ export function AdminAccountManagement() {
   const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
   const [sessionToken, setSessionToken] = useState("");
+  const [grantUsername, setGrantUsername] = useState("");
+  const [grantStartsAt, setGrantStartsAt] = useState("");
+  const [grantExpiresAt, setGrantExpiresAt] = useState("");
 
   const officersQuery = useQuery({
     queryKey: ["admin", "officers"],
@@ -84,6 +90,20 @@ export function AdminAccountManagement() {
       await queryClient.invalidateQueries({ queryKey: ["admin", "officers"] });
     },
     onError: (error: unknown) => toast.error(getErrorMessage(error, "Unable to verify OTP")),
+  });
+
+  const refreshOfficers = () => queryClient.invalidateQueries({ queryKey: ["admin", "officers"] });
+  const grantTemporaryAdmin = useMutation({
+    mutationFn: () => apiRequest<{ success: boolean }>(endpoints.admin.temporaryAdmin(grantUsername), {
+      method: "POST", body: JSON.stringify({ startsAt: new Date(grantStartsAt).toISOString(), expiresAt: new Date(grantExpiresAt).toISOString() }),
+    }),
+    onSuccess: async () => { toast.success("Temporary administrator access granted"); setGrantUsername(""); setGrantStartsAt(""); setGrantExpiresAt(""); await refreshOfficers(); },
+    onError: (error: unknown) => toast.error(getErrorMessage(error, "Unable to grant temporary access")),
+  });
+  const revokeTemporaryAdmin = useMutation({
+    mutationFn: (username: string) => apiRequest<{ success: boolean }>(endpoints.admin.temporaryAdmin(username), { method: "DELETE" }),
+    onSuccess: refreshOfficers,
+    onError: (error: unknown) => toast.error(getErrorMessage(error, "Unable to revoke temporary access")),
   });
 
   const canRequest = adminNumber.trim() && email.trim() && branch && password.length >= 8;
@@ -171,11 +191,22 @@ export function AdminAccountManagement() {
                   <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${officer.isActive ? "border-success/30 bg-success/10 text-success" : "border-destructive/30 bg-destructive/10 text-destructive"}`}>{officer.isActive ? "Active" : "Disabled"}</span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground"><span>{officer.branch || "All branches"}</span><span>•</span><span>{officer.role}</span></div>
+                {officer.temporaryAdmin && <div className="mt-2 text-[10px] font-semibold text-primary">Temporary administrator until {officer.temporaryAdminGrant?.expiresAt ? new Date(officer.temporaryAdminGrant.expiresAt).toLocaleString() : "—"}<button type="button" disabled={revokeTemporaryAdmin.isPending} onClick={() => { if (confirm(`Revoke temporary administrator access for ${officer.username}?`)) revokeTemporaryAdmin.mutate(officer.username); }} className="ml-2 rounded-full border border-destructive/30 px-2 py-0.5 text-destructive hover:bg-destructive/10">Revoke</button></div>}
               </div>
             ))}
           </div>
         </div>
       </div>
+      <form className="mt-6 rounded-2xl border border-primary/20 bg-primary/5 p-5" onSubmit={(event) => { event.preventDefault(); if (confirm(`Grant temporary administrator access to ${grantUsername}?`)) grantTemporaryAdmin.mutate(); }}>
+        <h4 className="text-sm font-semibold">Temporary administrator access</h4>
+        <p className="mt-1 text-xs text-muted-foreground">Permanent roles are unchanged. Backend authorization checks this grant on every request and it ends automatically at expiry.</p>
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <label className="text-xs font-medium text-muted-foreground">Administrator account<select required value={grantUsername} onChange={(event) => setGrantUsername(event.target.value)} className={fieldClass}><option value="">Select an account</option>{officersQuery.data?.filter((officer) => officer.permanentRole !== "admin" && officer.role !== "admin" && officer.isActive).map((officer) => <option key={officer.username} value={officer.username}>{officer.adminNumber || officer.username} ({officer.permanentRole || officer.role})</option>)}</select></label>
+          <label className="text-xs font-medium text-muted-foreground">Start time<input required type="datetime-local" value={grantStartsAt} onChange={(event) => setGrantStartsAt(event.target.value)} className={fieldClass} /></label>
+          <label className="text-xs font-medium text-muted-foreground">Expiry time<input required type="datetime-local" value={grantExpiresAt} onChange={(event) => setGrantExpiresAt(event.target.value)} className={fieldClass} /></label>
+        </div>
+        <button type="submit" disabled={!grantUsername || !grantStartsAt || !grantExpiresAt || grantTemporaryAdmin.isPending} className="mt-4 rounded-full bg-foreground px-4 py-2.5 text-sm font-semibold text-background disabled:opacity-50">{grantTemporaryAdmin.isPending ? "Granting…" : "Confirm and grant temporary access"}</button>
+      </form>
     </section>
   );
 }

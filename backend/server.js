@@ -41,6 +41,7 @@ const { createGateDecisionService } = require('./services/gateDecisionService');
 const { createNfcRouter } = require('./routes/nfc');
 const { createFingerprintRuntime } = require('./modules/fingerprint/routes');
 const { isEncryptionConfigured } = require('./modules/fingerprint/utils');
+const { getOfficerAccess } = require('./services/adminAccess');
 const FingerprintTemplate = require('./modules/fingerprint/model');
 
 const app = express();
@@ -573,6 +574,16 @@ const OfficerSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true },
   createdBy: String,
   verifiedAt: Date,
+  // The stored role is the permanent role. A grant never mutates it, so a
+  // temporary administrator remains distinguishable in data and audit trails.
+  temporaryAdminGrant: {
+    grantedBy: String,
+    grantedAt: Date,
+    startsAt: Date,
+    expiresAt: { type: Date, index: true },
+    revokedAt: Date,
+    revokedBy: String
+  },
   activeSessionId: String,
   lastLoginAt: Date
 });
@@ -2487,10 +2498,14 @@ function normalizeRoll(roll) {
 }
 
 function buildOfficerDto(officer) {
+  const access = getOfficerAccess(officer);
   return {
     id: officer?.username || null,
     username: officer?.username || '',
-    role: officer?.role || 'duty_officer',
+    role: access.effectiveRole,
+    permanentRole: officer?.role || 'duty_officer',
+    temporaryAdmin: access.temporaryAdmin,
+    temporaryAdminExpiresAt: access.grant?.expiresAt || null,
     fullName: officer?.fullName || officer?.username || 'Officer',
     type: 'officer'
   };
@@ -2546,6 +2561,16 @@ function publicOfficerRecord(officer) {
     adminNumber: record.adminNumber || record.username || '',
     email: record.email || '',
     role: record.role || '',
+    permanentRole: record.role || '',
+    temporaryAdmin: getOfficerAccess(record).temporaryAdmin,
+    temporaryAdminGrant: record.temporaryAdminGrant ? {
+      grantedBy: record.temporaryAdminGrant.grantedBy || '',
+      grantedAt: record.temporaryAdminGrant.grantedAt || null,
+      startsAt: record.temporaryAdminGrant.startsAt || null,
+      expiresAt: record.temporaryAdminGrant.expiresAt || null,
+      revokedAt: record.temporaryAdminGrant.revokedAt || null,
+      revokedBy: record.temporaryAdminGrant.revokedBy || null
+    } : null,
     branch: record.branch || '',
     isActive: record.isActive !== false,
     createdBy: record.createdBy || '',
@@ -3296,7 +3321,16 @@ async function requireOfficer(req, res, next) {
 
     officer.lastLoginAt = new Date();
     await officer.save();
-    req.officer = { username: officer.username, role: officer.role, branch: officer.branch || null, sessionId: payload.sessionId };
+    const access = getOfficerAccess(officer);
+    req.officer = {
+      username: officer.username,
+      role: access.effectiveRole,
+      permanentRole: officer.role,
+      isPermanentAdmin: access.isPermanentAdmin,
+      temporaryAdmin: access.temporaryAdmin,
+      branch: officer.branch || null,
+      sessionId: payload.sessionId
+    };
     next();
   } catch (err) {
     res.status(401).json({ error: 'Invalid or expired administrator session' });
@@ -3307,6 +3341,13 @@ function requireAdmin(req, res, next) {
   const role = req.officer?.role || req.user?.role;
   if (role !== 'admin') {
     return res.status(403).json({ success: false, message: 'Admin role required.' });
+  }
+  next();
+}
+
+function requirePermanentAdmin(req, res, next) {
+  if (!req.officer?.isPermanentAdmin) {
+    return res.status(403).json({ success: false, message: 'Permanent administrator role required.' });
   }
   next();
 }
@@ -3367,8 +3408,7 @@ app.get('/api/device/config', requireOfficer, asyncHandler(async (req, res) => {
   res.json(config);
 }));
 
-app.put('/api/device/config', requireOfficer, asyncHandler(async (req, res) => {
-  if (req.officer.role !== 'admin') return res.status(403).json({ error: 'Super administrator role required.' });
+app.put('/api/device/config', requireOfficer, requireAdmin, asyncHandler(async (req, res) => {
   const allowedModes = ['REGISTRATION', 'ATTENDANCE', 'GATE_ENTRY', 'VERIFICATION'];
   const update = {};
   for (const key of ['deviceName', 'reader', 'location']) {
@@ -3416,8 +3456,19 @@ const authenticateJWT = asyncHandler(async (req, res, next) => {
 
     officer.lastLoginAt = new Date();
     await officer.save();
-    req.officer = { username: officer.username, role: officer.role, branch: officer.branch || null, sessionId: user.sessionId };
-    req.user = { ...user, branch: officer.branch || null };
+    const access = getOfficerAccess(officer);
+    // Do not trust the role embedded in a JWT: grants, expiries and revocations
+    // are resolved from MongoDB on every protected request.
+    req.officer = {
+      username: officer.username,
+      role: access.effectiveRole,
+      permanentRole: officer.role,
+      isPermanentAdmin: access.isPermanentAdmin,
+      temporaryAdmin: access.temporaryAdmin,
+      branch: officer.branch || null,
+      sessionId: user.sessionId
+    };
+    req.user = { ...user, role: access.effectiveRole, branch: officer.branch || null };
     return next();
   }
 
@@ -3657,7 +3708,7 @@ app.get('/api/auth/me', authenticateJWT, asyncHandler(async (req, res) => {
     return res.json({
       success: true,
       authenticated: true,
-      role: officer.role || req.officer.role,
+      role: req.officer.role,
       user: buildOfficerDto(officer),
       officer: buildOfficerDto(officer)
     });
@@ -6750,7 +6801,7 @@ async function buildDashboardSnapshot() {
   const endOfToday = new Date(startOfToday);
   endOfToday.setDate(endOfToday.getDate() + 1);
 
-  const [records, cadetsWithPending, totalCadets, blockedCadets] = await Promise.all([
+  const [records, cadetsWithPending, totalCadets, blockedCadets, totalLeaveRecords, approvedLeaveRecords, rejectedLeaveRecords] = await Promise.all([
     LeaveRecord.find()
       .select(DASHBOARD_RECORD_FIELDS)
       .sort({ checkOutDate: -1, passIssuedAt: -1, _id: -1 })
@@ -6767,6 +6818,16 @@ async function buildDashboardSnapshot() {
         { leaveBlockedUntil: { $exists: false } },
         { leaveBlockedUntil: { $gt: now } }
       ]
+    }),
+    LeaveRecord.countDocuments(),
+    LeaveRecord.countDocuments({
+      $or: [
+        { approvalStatus: 'approved' },
+        { status: { $in: ['approved', 'out', 'returned', 'late_return'] } }
+      ]
+    }),
+    LeaveRecord.countDocuments({
+      $or: [{ approvalStatus: 'rejected' }, { status: 'rejected' }]
     })
   ]);
 
@@ -6793,12 +6854,22 @@ async function buildDashboardSnapshot() {
   const pendingHodCount = cadetsWithPending
     .filter(cadet => cadet.pendingLeave?.approvalStatus === 'pending_approval')
     .length;
+  const pendingApprovedCount = cadetsWithPending.filter(cadet => cadet.pendingLeave?.approvalStatus === 'approved').length;
+  const pendingRejectedCount = cadetsWithPending.filter(cadet => cadet.pendingLeave?.approvalStatus === 'rejected').length;
 
   const byType = type => activeRows.filter(row => row.leaveType === type).length;
   const pendingByType = type => allRows.filter(row => row.leaveType === type && row.approvalStatus === 'pending_approval').length;
   const rejectedByType = type => allRows.filter(row => row.leaveType === type && (row.approvalStatus === 'rejected' || row.status === 'rejected')).length;
   const expiredByType = type => allRows.filter(row => row.leaveType === type && (row.status === 'overdue' || row.status === 'expired')).length;
   const stats = {
+    // LeaveRecord preserves reviewed/issued leaves while pendingLeave holds the
+    // current request. Keep these counts separate from notifications and derive
+    // them directly from persisted records rather than audit-log approximations.
+    totalLeaveRequests: totalLeaveRecords + cadetsWithPending.length,
+    pendingRequests: pendingHodCount,
+    awaitingAction: pendingHodCount,
+    approvedRequests: approvedLeaveRecords + pendingApprovedCount,
+    rejectedRequests: rejectedLeaveRecords + pendingRejectedCount,
     totalHomeLeave: byType('Home Leave'),
     totalMedicalLeave: byType('Medical Leave'),
     totalEmergencyLeave: byType('Emergency Leave'),
@@ -7641,6 +7712,8 @@ app.get('/api/admin/leave-requests', requireOfficer, asyncHandler(async (req, re
 }));
 
 app.get('/api/admin/leave-token-control', requireOfficer, asyncHandler(async (req, res) => {
+  return res.status(410).json({ success: false, code: 'FEATURE_REMOVED', message: 'Leave Token Control has been removed. Existing leave and token history is preserved.' });
+  /* Historical implementation retained temporarily for rollback review; no longer reachable. */
   const [cadetsWithRequests, leaveRecords] = await Promise.all([
     Cadet.find({ pendingLeave: { $exists: true, $ne: null } })
       .select('roll name email batch course studentId pendingLeave leaveTokens leaveStatus status leaveBlocked leaveBlockedReason leaveBlockedUntil')
@@ -7700,6 +7773,8 @@ app.get('/api/admin/leave-token-control', requireOfficer, asyncHandler(async (re
 }));
 
 app.post('/api/admin/leave-token-control/:roll/:action', requireOfficer, asyncHandler(async (req, res) => {
+  return res.status(410).json({ success: false, code: 'FEATURE_REMOVED', message: 'Leave Token Control has been removed. Emergency gate verification remains available through its dedicated workflow.' });
+  /* Historical implementation retained temporarily for rollback review; no longer reachable. */
   const roll = normalizeRoll(req.params.roll);
   const action = String(req.params.action || '').toLowerCase();
   if (!['generate', 'revoke', 'reissue'].includes(action)) {
@@ -7979,12 +8054,12 @@ app.delete('/api/admin/cadets/:roll', authenticateJWT, requireOfficer, asyncHand
 }));
 
 // Admin Officers CRUD
-app.get('/api/admin/officers', requireOfficer, requireAdmin, asyncHandler(async (req, res) => {
+app.get('/api/admin/officers', requireOfficer, requirePermanentAdmin, asyncHandler(async (req, res) => {
   const officers = await Officer.find().select('-passwordHash');
   res.json(officers.map(publicOfficerRecord));
 }));
 
-app.post('/api/admin/officers', requireOfficer, requireAdmin, asyncHandler(async (_req, res) => {
+app.post('/api/admin/officers', requireOfficer, requirePermanentAdmin, asyncHandler(async (_req, res) => {
   res.status(409).json({
     success: false,
     code: 'OTP_CONFIRMATION_REQUIRED',
@@ -7992,7 +8067,7 @@ app.post('/api/admin/officers', requireOfficer, requireAdmin, asyncHandler(async
   });
 }));
 
-app.post('/api/admin/officers/provision/request-otp', requireOfficer, requireAdmin, asyncHandler(async (req, res) => {
+app.post('/api/admin/officers/provision/request-otp', requireOfficer, requirePermanentAdmin, asyncHandler(async (req, res) => {
   const adminNumber = String(req.body?.adminNumber || '').trim().toUpperCase();
   const email = String(req.body?.email || '').trim().toLowerCase();
   const branch = String(req.body?.branch || '').trim().toUpperCase();
@@ -8050,7 +8125,7 @@ app.post('/api/admin/officers/provision/request-otp', requireOfficer, requireAdm
   res.json({ success: true, sessionToken, expiresInSeconds: 300, message: 'Verification OTP sent.' });
 }));
 
-app.post('/api/admin/officers/provision/confirm', requireOfficer, requireAdmin, asyncHandler(async (req, res) => {
+app.post('/api/admin/officers/provision/confirm', requireOfficer, requirePermanentAdmin, asyncHandler(async (req, res) => {
   const sessionToken = String(req.body?.sessionToken || '').trim();
   const otp = String(req.body?.otp || '').trim();
   if (!sessionToken || !/^\d{6}$/.test(otp)) {
@@ -8109,9 +8184,46 @@ app.post('/api/admin/officers/provision/confirm', requireOfficer, requireAdmin, 
   res.status(201).json({ success: true, message: 'Administrator account created successfully.', officer: publicOfficerRecord(officer) });
 }));
 
-app.delete('/api/admin/officers/:username', requireOfficer, requireAdmin, asyncHandler(async (req, res) => {
+app.delete('/api/admin/officers/:username', requireOfficer, requirePermanentAdmin, asyncHandler(async (req, res) => {
+  const officer = await Officer.findOne({ username: req.params.username });
+  if (!officer) return res.status(404).json({ success: false, message: 'Administrator account not found.' });
+  if (officer.role === 'admin' && await Officer.countDocuments({ role: 'admin', isActive: true }) <= 1) {
+    return res.status(409).json({ success: false, message: 'The last permanent administrator cannot be removed.' });
+  }
   await Officer.deleteOne({ username: req.params.username });
+  await AuditLog.create({ action: 'ADMIN_ACCOUNT_DELETED', details: { affectedUser: officer.username, deletedBy: req.officer.username, timestamp: new Date() } });
   res.json({ success: true });
+}));
+
+app.post('/api/admin/officers/:username/temporary-admin', requireOfficer, requirePermanentAdmin, asyncHandler(async (req, res) => {
+  const username = String(req.params.username || '').trim();
+  const startsAt = new Date(req.body?.startsAt);
+  const expiresAt = new Date(req.body?.expiresAt);
+  if (!username || Number.isNaN(startsAt.getTime()) || Number.isNaN(expiresAt.getTime()) || expiresAt <= startsAt) {
+    return res.status(400).json({ success: false, message: 'A valid start time and later expiry time are required.' });
+  }
+  const officer = await Officer.findOne({ username, isActive: true });
+  if (!officer) return res.status(404).json({ success: false, message: 'Active administrator account not found.' });
+  if (officer.role === 'admin') return res.status(409).json({ success: false, message: 'This user is already a permanent administrator.' });
+  if (officer.username === req.officer.username) return res.status(403).json({ success: false, message: 'Administrators cannot grant themselves temporary access.' });
+
+  officer.temporaryAdminGrant = { grantedBy: req.officer.username, grantedAt: new Date(), startsAt, expiresAt, revokedAt: null, revokedBy: null };
+  await officer.save();
+  await AuditLog.create({ action: 'TEMPORARY_ADMIN_GRANTED', details: { grantedBy: req.officer.username, affectedUser: officer.username, startsAt, expiresAt, timestamp: new Date() } });
+  res.status(201).json({ success: true, officer: publicOfficerRecord(officer) });
+}));
+
+app.delete('/api/admin/officers/:username/temporary-admin', requireOfficer, requirePermanentAdmin, asyncHandler(async (req, res) => {
+  const officer = await Officer.findOne({ username: String(req.params.username || '').trim() });
+  if (!officer) return res.status(404).json({ success: false, message: 'Administrator account not found.' });
+  if (officer.role === 'admin') return res.status(409).json({ success: false, message: 'Permanent administrator access cannot be revoked here.' });
+  const grant = officer.temporaryAdminGrant;
+  if (!grant || grant.revokedAt || new Date(grant.expiresAt) <= new Date()) return res.status(409).json({ success: false, message: 'No active temporary administrator grant exists.' });
+  officer.temporaryAdminGrant.revokedAt = new Date();
+  officer.temporaryAdminGrant.revokedBy = req.officer.username;
+  await officer.save();
+  await AuditLog.create({ action: 'TEMPORARY_ADMIN_REVOKED', details: { revokedBy: req.officer.username, affectedUser: officer.username, grantedBy: grant.grantedBy, timestamp: new Date() } });
+  res.json({ success: true, officer: publicOfficerRecord(officer) });
 }));
 
 // CSV Exports
